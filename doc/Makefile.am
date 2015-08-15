@@ -22,6 +22,7 @@ man_MANS = \
 	lxc-checkconfig.1 \
 	lxc-checkpoint.1 \
 	lxc-clone.1 \
+	lxc-copy.1 \
 	lxc-config.1 \
 	lxc-console.1 \
 	lxc-create.1 \
