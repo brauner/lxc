@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <poll.h>
+#include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/file.h>
 #include <sys/mount.h>
@@ -83,6 +84,7 @@ const struct ns_info ns_info[LXC_NS_MAX] = {
 	[LXC_NS_NET] = {"net", CLONE_NEWNET}
 };
 
+static void remove_snapshot_entry(struct lxc_handler *handler, const char *name);
 static bool do_destroy_container(struct lxc_conf *conf);
 static int lxc_rmdir_onedev_wrapper(void *data);
 static void lxc_destroy_container_on_signal(struct lxc_handler *handler,
@@ -1322,6 +1324,8 @@ static void lxc_destroy_container_on_signal(struct lxc_handler *handler,
 		return;
 	}
 
+	remove_snapshot_entry(handler, name);
+
 	if (am_unpriv())
 		ret = userns_exec_1(handler->conf, lxc_rmdir_onedev_wrapper, destroy);
 	else
@@ -1347,5 +1351,124 @@ static bool do_destroy_container(struct lxc_conf *conf) {
                 return true;
         }
         return bdev_destroy(conf);
+}
+
+static void remove_snapshot_entry(struct lxc_handler *handler, const char *name)
+{
+	char rdepfile[MAXPATHLEN];
+	char path[MAXPATHLEN];
+	char newpath[MAXPATHLEN];
+	char *base = NULL;
+	char *buf = NULL;
+	char *del = NULL;
+	char *scratch = NULL;
+	char *origpath = NULL;
+	char *origname = NULL;
+	int ret = 0;
+	int bytes = 0;
+	int fd = -1;
+	size_t len = 0;
+	struct stat fbuf;
+
+	ret = snprintf(rdepfile, MAXPATHLEN, "%s/%s/lxc_rdepends", handler->lxcpath, name);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		return;
+
+	fd = open(rdepfile, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+
+	ret = fstat(fd, &fbuf);
+	if (ret < 0) {
+		close(fd);
+		return;
+	}
+
+	base = calloc(fbuf.st_size + 1, sizeof(char));
+	if (!base) {
+		close(fd);
+		return;
+	}
+
+	ret = read(fd, (void *)base, fbuf.st_size);
+	if (ret <= 0) {
+		free(base);
+		close(fd);
+		return;
+	}
+
+	origpath = strtok_r(base, "\n", &scratch);
+	if (!origpath) {
+		free(base);
+		close(fd);
+		return;
+	}
+
+	origname = strtok_r(NULL, "\n", &scratch);
+	if (!origname) {
+		free(base);
+		close(fd);
+		return;
+	}
+
+	close(fd);
+
+	ret = snprintf(path, MAXPATHLEN, "%s/%s/lxc_snapshots", origpath, origname);
+	if (ret < 0 || ret >= MAXPATHLEN) {
+		free(base);
+		return;
+	}
+	free(base);
+
+	ret = snprintf(newpath, MAXPATHLEN, "%s\n%s\n", handler->lxcpath, name);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		return;
+
+	fd = open(path, O_RDWR | O_CLOEXEC);
+	if (fd < 0)
+		return;
+
+	ret = fstat(fd, &fbuf);
+	if (ret < 0) {
+		close(fd);
+		return;
+	}
+
+	if (fbuf.st_size != 0) {
+		/* write terminating \0-byte to file */
+		if (pwrite(fd, "", 1, fbuf.st_size) <= 0) {
+			close(fd);
+			return;
+		}
+
+		buf = mmap(NULL, fbuf.st_size + 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		if (buf == MAP_FAILED) {
+			SYSERROR("Failed to create mapping %s", path);
+			close(fd);
+			return;
+		}
+
+		len = strlen(newpath);
+		while ((del = strstr((char *)buf, newpath))) {
+			memmove(del, del + len, strlen(del) - len + 1);
+			bytes += len;
+		}
+
+		munmap(buf, fbuf.st_size + 1);
+		if (ftruncate(fd, fbuf.st_size - bytes) < 0) {
+			SYSERROR("Failed to truncate file %s", path);
+			close(fd);
+			return;
+		}
+	}
+
+	close(fd);
+
+	/* If the lxc-snapshot file is empty, remove it. */
+	if (stat(path, &fbuf) < 0)
+		return;
+	if (!fbuf.st_size) {
+		remove(path);
+	}
 }
 
