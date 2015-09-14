@@ -98,8 +98,9 @@ struct lxc_arguments {
 	int list;
 	char *groups;
 
-	/* lxc-snapshot and lxc-clone */
+	/* lxc-snapshot and lxc-copy */
 	enum task {
+		CLONE,
 		DESTROY,
 		LIST,
 		RESTORE,
@@ -111,6 +112,9 @@ struct lxc_arguments {
 	char *newname;
 	char *newpath;
 	char *snapname;
+	char **mntlist;
+	char **mnttype;
+	int keepdata;
 	int keepname;
 	int keepmac;
 
