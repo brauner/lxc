@@ -69,10 +69,13 @@ static const struct option my_longopts[] = {
 };
 
 /* mount keys */
+#define BIND 0
+#define OVERLAY 1
+#define AUFS 2
 static char *const keys[] = {
-	[0] = "bind",
-	[1] = "overlay",
-	[2] = "aufs",
+	[BIND]    = "bind",
+	[OVERLAY] = "overlay",
+	[AUFS]    = "aufs",
 	NULL
 };
 
@@ -531,15 +534,15 @@ static int parse_mntsubopts(struct lxc_arguments *args, char *subopts,
 {
 	while (*subopts != '\0') {
 		switch (getsubopt(&subopts, keys, &mntparameters)) {
-		case 0:
+		case BIND:
 			if (create_mntlist(args, mntparameters, "bind") < 0)
 				return -1;
 			break;
-		case 1:
+		case OVERLAY:
 			if (create_mntlist(args, mntparameters, "overlay") < 0)
 				return -1;
 			break;
-		case 2:
+		case AUFS:
 			if (create_mntlist(args, mntparameters, "aufs") < 0)
 				return -1;
 			break;
