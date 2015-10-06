@@ -116,19 +116,21 @@ static int create_mntlist(struct lxc_arguments *args, char *mntparameters,
 static int do_clone(struct lxc_container *c, char *newname, char *newpath,
 		    int flags, char *bdevtype, uint64_t fssize, enum task task,
 		    char **args);
-static int do_clone_ephemeral(struct lxc_container *c, char *newname,
-			      char *newpath, int flags, char *bdevtype,
-			      uint64_t fssize, char **args);
+static int do_clone_ephemeral(struct lxc_container *c,
+			      struct lxc_arguments *args, char **argv,
+			      int flags);
 static int do_clone_rename(struct lxc_container *c, char *newname);
 static int do_clone_task(struct lxc_container *c, enum task task, int flags,
 			 char **args);
-static char *generate_random_name(const char *name, const char *path);
+static char *generate_random_name(const char *name, const char *path,
+				  unsigned int size);
 static uint64_t get_fssize(char *s);
+static int parse_aufs_mount(struct lxc_container *c, char *mntstring, int index);
+static int parse_bind_mount(struct lxc_container *c, char *mntstring);
 static int parse_mntsubopts(struct lxc_arguments *args, char *subopts,
 			    char *const *keys, char *mntparameters);
-static int set_bind_mount(struct lxc_container *c, char *mntstring);
-static int set_union_mount(struct lxc_container *c, char *newpath,
-			   char *mntstring, int index, char *uniontype);
+static int parse_overlay_mount(struct lxc_container *c, char *mntstring,
+			       int index);
 
 int main(int argc, char *argv[])
 {
@@ -263,9 +265,9 @@ static int do_clone(struct lxc_container *c, char *newname, char *newpath,
 	return 0;
 }
 
-static int do_clone_ephemeral(struct lxc_container *c, char *newname,
-			      char *newpath, int flags, char *bdevtype,
-			      uint64_t fssize, char **args)
+static int do_clone_ephemeral(struct lxc_container *c,
+			      struct lxc_arguments *args, char **argv,
+			      int flags)
 {
 	int i;
 	int index = 0;
@@ -275,70 +277,56 @@ static int do_clone_ephemeral(struct lxc_container *c, char *newname,
 	lxc_attach_options_t attach_options = LXC_ATTACH_OPTIONS_DEFAULT;
 	attach_options.env_policy = LXC_ATTACH_CLEAR_ENV;
 
-	if (!newname) {
-		randname = generate_random_name(c->name, newpath ? newpath : my_args.lxcpath[0]);
+	if (!args->newname) {
+		randname = generate_random_name(c->name, args->newpath ? args->newpath : args->lxcpath[0], 8);
 		if (randname)
-			clone = c->clone(c, randname, newpath, flags, bdevtype,
-					 NULL, fssize, args);
+			args->newname = randname;
 		else
 			return -1;
-	} else {
-		clone = c->clone(c, newname, newpath, flags, bdevtype, NULL,
-				 fssize, args);
-	}
 
+	}
+	clone = c->clone(c, args->newname, args->newpath, flags,
+			 args->bdevtype, NULL, args->fssize, argv);
 	if (!clone) {
 		fprintf(stderr, "Creating clone of %s failed\n", c->name);
 		return -1;
 	}
 
-	if (!my_args.keepdata) {
+	if (!args->keepdata) {
 		if (!clone->set_config_item(clone, "lxc.ephemeral", "1")) {
 			clone->destroy(clone);
 			lxc_container_put(clone);
 			fprintf(stderr, "Error setting config item\n");
 			return -1;
 		}
-
-		if (!clone->save_config(clone, NULL)) {
-			clone->destroy(clone);
-			lxc_container_put(clone);
-			fprintf(stderr, "Error saving config item\n");
-			return -1;
-		}
 	}
 
 	for (i = 0; i < mntindex; i++) {
-		if (strncmp(my_args.mnttype[i], "bind", 4) == 0) {
-			if (set_bind_mount(clone, my_args.mntlist[i]) < 0) {
-				clone->destroy(clone);
-				lxc_container_put(clone);
+		if (strncmp(args->mnttype[i], "bind", 4) == 0) {
+			if (parse_bind_mount(clone, args->mntlist[i]) < 0)
 				return -1;
-			}
-		} else {
-			if (set_union_mount(clone, newpath, my_args.mntlist[i],
-					    index, my_args.mnttype[i]) < 0) {
-				clone->destroy(clone);
-				lxc_container_put(clone);
+		} else if (strncmp(args->mnttype[i], "overlay", 7) == 0) {
+			if (parse_overlay_mount(clone, args->mntlist[i], index) < 0)
 				return -1;
-			}
-			index++;
-		}
-		if (!clone->save_config(clone, NULL)) {
-			clone->destroy(clone);
-			lxc_container_put(clone);
-			fprintf(stderr, "Error saving config item\n");
-			return -1;
+		} else if (strncmp(args->mnttype[i], "aufs", 4) == 0) {
+			if (parse_aufs_mount(clone, args->mntlist[i], index) < 0)
+				return -1;
 		}
 	}
 
-	DOUBLE_INFO("Created %s as %s of %s\n", newname ? newname : randname,
-		    my_args.keepdata ? "clone" : "ephemeral clone", c->name);
+	if (!clone->save_config(clone, NULL)) {
+		clone->destroy(clone);
+		lxc_container_put(clone);
+		fprintf(stderr, "Error saving config item\n");
+		return -1;
+	}
 
-	if (!my_args.daemonize && my_args.argc) {
+	DOUBLE_INFO("Created %s as %s of %s\n", args->name, "clone", args->newname);
+
+	if (!args->daemonize && args->argc) {
 		clone->want_daemonize(clone, true);
-		my_args.daemonize = 1;
-	} else if (!my_args.daemonize) {
+		args->daemonize = 1;
+	} else if (!args->daemonize) {
 		clone->want_daemonize(clone, false);
 	}
 
@@ -350,10 +338,10 @@ static int do_clone_ephemeral(struct lxc_container *c, char *newname,
 		return -1;
 	}
 
-	if (my_args.daemonize && my_args.argc) {
+	if (args->daemonize && args->argc) {
 		ret = clone->attach_run_wait(clone, &attach_options,
-					     my_args.argv[0],
-					     (const char *const *)my_args.argv);
+					     args->argv[0],
+					     (const char *const *)args->argv);
 		if (ret < 0) {
 			lxc_container_put(clone);
 			return -1;
@@ -386,9 +374,7 @@ static int do_clone_task(struct lxc_container *c, enum task task, int flags,
 
 	switch (task) {
 	case DESTROY:
-		ret = do_clone_ephemeral(c, my_args.newname, my_args.newpath,
-					 flags, my_args.bdevtype,
-					 my_args.fssize, args);
+		ret = do_clone_ephemeral(c, &my_args, args, flags);
 		break;
 	case RENAME:
 		ret = do_clone_rename(c, my_args.newname);
@@ -438,7 +424,8 @@ static int create_mntlist(struct lxc_arguments *args, char *mntparameters,
 	return 0;
 }
 
-static char *generate_random_name(const char *name, const char *path)
+static char *generate_random_name(const char *name, const char *path,
+				  unsigned int size)
 {
 	char testpath[MAXPATHLEN];
 	static char randname[MAXPATHLEN];
@@ -458,7 +445,7 @@ static char *generate_random_name(const char *name, const char *path)
 		suffix = rand();
 #endif
 
-		ret = snprintf(randname, MAXPATHLEN, "%s_%08x", name, suffix);
+		ret = snprintf(randname, MAXPATHLEN, "%s_%.*x", name, size, suffix);
 		if (ret < 0 || ret >= MAXPATHLEN) {
 			ERROR("Generating a random name for the clone of %s " "failed", name);
 			return NULL;
@@ -531,7 +518,7 @@ static int parse_mntsubopts(struct lxc_arguments *args, char *subopts,
 	return 0;
 }
 
-static int set_bind_mount(struct lxc_container *c, char *mntstring)
+static int parse_bind_mount(struct lxc_container *c, char *mntstring)
 {
 	int len = 0;
 	int ret = 0;
@@ -608,15 +595,14 @@ err:
 	return -1;
 }
 
-static int set_union_mount(struct lxc_container *c, char *newpath,
-			   char *mntstring, int index, char *uniontype)
+static int parse_overlay_mount(struct lxc_container *c, char *mntstring,
+			       int index)
 {
 	int len = 0;
 	int ret = 0;
 	char *mntentry = NULL;
 	char *src = NULL;
 	char *dest = NULL;
-	const char *xinopath = "/dev/shm/aufs.xino";
 	char **mntarray = NULL;
 	char upperdir[MAXPATHLEN];
 	char workdir[MAXPATHLEN];
@@ -630,9 +616,9 @@ static int set_union_mount(struct lxc_container *c, char *newpath,
 		goto err;
 
 	len = lxc_array_len((void **)mntarray);
-	if (len == 1) { /* aufs=src or overlay=src */
+	if (len == 1) { /* overlay=src */
 		dest = construct_path(mntarray[0], false);
-	} else if (len == 2) { /* aufs=src:dest or overlay=src:dest */
+	} else if (len == 2) { /* overlay=src:dest */
 		dest = construct_path(mntarray[1], false);
 	} else {
 		INFO("Excess elements in mount specification");
@@ -641,44 +627,27 @@ static int set_union_mount(struct lxc_container *c, char *newpath,
 	if (!dest)
 		goto err;
 
-	/* Create upperdir for both aufs and overlay */
 	ret = snprintf(upperdir, MAXPATHLEN, "%s/%s/tmpfs/delta%d",
-		       newpath ? newpath : my_args.lxcpath[0], c->name, index);
+			my_args.newpath ? my_args.newpath : my_args.lxcpath[0], c->name, index);
 	if (ret < 0 || ret >= MAXPATHLEN)
 		goto err;
 
-	if (strncmp(uniontype, "overlay", 7) == 0) {
-		/* Create workdir */
-		ret = snprintf(workdir, MAXPATHLEN, "%s/%s/tmpfs/workdir%d",
-			       newpath ? newpath : my_args.lxcpath[0], c->name, index);
-		if (ret < 0 || ret >= MAXPATHLEN)
-			goto err;
+	ret = snprintf(workdir, MAXPATHLEN, "%s/%s/tmpfs/workdir%d",
+			my_args.newpath ? my_args.newpath : my_args.lxcpath[0], c->name, index);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		goto err;
 
-		len = 2 * strlen(src) + strlen(dest) + strlen(upperdir) +
-		      strlen(workdir) +
-		      strlen("  overlay lowerdir=,upperdir=,workdir=,create=dir") + 1;
-		mntentry = malloc(len);
-		if (!mntentry)
-			goto err;
+	len = 2 * strlen(src) + strlen(dest) + strlen(upperdir) +
+		strlen(workdir) +
+		strlen("  overlay lowerdir=,upperdir=,workdir=,create=dir") + 1;
+	mntentry = malloc(len);
+	if (!mntentry)
+		goto err;
 
-		ret = snprintf(mntentry, len, "%s %s overlay lowerdir=%s,upperdir=%s,workdir=%s,create=dir",
-			       src, dest, src, upperdir, workdir);
-		if (ret < 0 || ret >= len)
-			goto err;
-	} else if (strncmp(uniontype, "aufs", 4) == 0) {
-		len = 2 * strlen(src) + strlen(dest) + strlen(upperdir) +
-		      strlen(xinopath) +
-		      strlen("  aufs br==rw:=ro,xino=,create=dir") + 1;
-
-		mntentry = malloc(len);
-		if (!mntentry)
-			goto err;
-
-		ret = snprintf(mntentry, len, "%s %s aufs br=%s=rw:%s=ro,xino=%s,create=dir",
-			       src, dest, upperdir, src, xinopath);
-		if (ret < 0 || ret >= len)
-			goto err;
-	}
+	ret = snprintf(mntentry, len, "%s %s overlay lowerdir=%s,upperdir=%s,workdir=%s,create=dir",
+			src, dest, src, upperdir, workdir);
+	if (ret < 0 || ret >= len)
+		goto err;
 
 	if (!c->set_config_item(c, "lxc.mount.entry", mntentry)) {
 		fprintf(stderr, "Error setting config item\n");
@@ -699,3 +668,70 @@ err:
 	return -1;
 }
 
+static int parse_aufs_mount(struct lxc_container *c, char *mntstring, int index)
+{
+	int len = 0;
+	int ret = 0;
+	char *mntentry = NULL;
+	char *src = NULL;
+	char *dest = NULL;
+	const char *xinopath = "/dev/shm/aufs.xino";
+	char **mntarray = NULL;
+	char upperdir[MAXPATHLEN];
+
+	mntarray = lxc_string_split(mntstring, ':');
+	if (!mntarray)
+		goto err;
+
+	src = construct_path(mntarray[0], true);
+	if (!src)
+		goto err;
+
+	len = lxc_array_len((void **)mntarray);
+	if (len == 1) { /* aufs=src */
+		dest = construct_path(mntarray[0], false);
+	} else if (len == 2) { /* aufs=src:dest */
+		dest = construct_path(mntarray[1], false);
+	} else {
+		INFO("Excess elements in mount specification");
+		goto err;
+	}
+	if (!dest)
+		goto err;
+
+	ret = snprintf(upperdir, MAXPATHLEN, "%s/%s/tmpfs/delta%d",
+			my_args.newpath ? my_args.newpath : my_args.lxcpath[0], c->name, index);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		goto err;
+
+	len = 2 * strlen(src) + strlen(dest) + strlen(upperdir) +
+		strlen(xinopath) +
+		strlen("  aufs br==rw:=ro,xino=,create=dir") + 1;
+
+	mntentry = malloc(len);
+	if (!mntentry)
+		goto err;
+
+	ret = snprintf(mntentry, len, "%s %s aufs br=%s=rw:%s=ro,xino=%s,create=dir",
+			src, dest, upperdir, src, xinopath);
+	if (ret < 0 || ret >= len)
+		goto err;
+
+	if (!c->set_config_item(c, "lxc.mount.entry", mntentry)) {
+		fprintf(stderr, "Error setting config item\n");
+		goto err;
+	}
+
+	free(src);
+	free(dest);
+	free(mntentry);
+	lxc_free_array((void **)mntarray, free);
+	return 0;
+
+err:
+	free(src);
+	free(dest);
+	free(mntentry);
+	lxc_free_array((void **)mntarray, free);
+	return -1;
+}
