@@ -124,8 +124,6 @@ static int do_clone_task(struct lxc_container *c, enum task task, int flags,
 			 char **args);
 static char *generate_random_name(const char *name, const char *path);
 static uint64_t get_fssize(char *s);
-static int mkdir_userns_wrapper(void *arg);
-static int mkdir_wrapper(struct lxc_container *c, char *arg);
 static int parse_mntsubopts(struct lxc_arguments *args, char *subopts,
 			    char *const *keys, char *mntparameters);
 static int set_bind_mount(struct lxc_container *c, char *mntstring);
@@ -509,26 +507,6 @@ static uint64_t get_fssize(char *s)
 	return ret;
 }
 
-static int mkdir_userns_wrapper(void *arg)
-{
-	const char *dir = (const char *)arg;
-	return mkdir_p(dir, 0755);
-}
-
-static int mkdir_wrapper(struct lxc_container *c, char *arg)
-{
-	if (am_unpriv()) {
-		if (userns_exec_1(c->lxc_conf, mkdir_userns_wrapper, (void *)arg) < 0)
-			return -1;
-		if (chown_mapped_root(arg, c->lxc_conf) < 0)
-			return -1;
-	} else {
-		if (mkdir_p(arg, 0755) < 0)
-			return -1;
-	}
-	return 0;
-}
-
 static int parse_mntsubopts(struct lxc_arguments *args, char *subopts,
 			    char *const *keys, char *mntparameters)
 {
@@ -640,7 +618,6 @@ static int set_union_mount(struct lxc_container *c, char *newpath,
 	char *dest = NULL;
 	const char *xinopath = "/dev/shm/aufs.xino";
 	char **mntarray = NULL;
-	char tmpfs[MAXPATHLEN];
 	char upperdir[MAXPATHLEN];
 	char workdir[MAXPATHLEN];
 
@@ -664,23 +641,10 @@ static int set_union_mount(struct lxc_container *c, char *newpath,
 	if (!dest)
 		goto err;
 
-	/* Create tmpfs folder under which we create the delta and workdir
-	 * directories */
-	ret = snprintf(tmpfs, MAXPATHLEN, "%s/%s/tmpfs",
-		       newpath ? newpath : my_args.lxcpath[0], c->name);
-	if (ret < 0 || ret >= MAXPATHLEN)
-		goto err;
-
-	if (mkdir_wrapper(c, tmpfs) < 0)
-		goto err;
-
 	/* Create upperdir for both aufs and overlay */
 	ret = snprintf(upperdir, MAXPATHLEN, "%s/%s/tmpfs/delta%d",
 		       newpath ? newpath : my_args.lxcpath[0], c->name, index);
 	if (ret < 0 || ret >= MAXPATHLEN)
-		goto err;
-
-	if (mkdir_wrapper(c, upperdir) < 0)
 		goto err;
 
 	if (strncmp(uniontype, "overlay", 7) == 0) {
@@ -688,9 +652,6 @@ static int set_union_mount(struct lxc_container *c, char *newpath,
 		ret = snprintf(workdir, MAXPATHLEN, "%s/%s/tmpfs/workdir%d",
 			       newpath ? newpath : my_args.lxcpath[0], c->name, index);
 		if (ret < 0 || ret >= MAXPATHLEN)
-			goto err;
-
-		if (mkdir_wrapper(c, workdir) < 0)
 			goto err;
 
 		len = 2 * strlen(src) + strlen(dest) + strlen(upperdir) +
