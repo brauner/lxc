@@ -2894,6 +2894,105 @@ static int create_file_dirname(char *path, struct lxc_conf *conf)
 	return ret;
 }
 
+/* When we clone a container with overlay or aufs lxc.mount.entry entries we
+*  need to update these absolute paths. In order to do this we add the function
+*  update_union_mount_entry_paths() in lxccontainer.c. The function operates on
+*  c->lxc_conf->unexpanded_config instead of the intuitively plausible
+*  c->lxc_conf->mount_list because the latter also contains mounts from other
+*  files as well as generic mounts. */
+static int update_union_mount_entry_paths(struct lxc_conf *lxc_conf,
+					  const char *lxc_path,
+					  const char *lxc_name,
+					  const char *newpath,
+					  const char *newname)
+{
+	char new_upper[MAXPATHLEN];
+	char new_work[MAXPATHLEN];
+	char old_upper[MAXPATHLEN];
+	char old_work[MAXPATHLEN];
+	char *cleanpath = NULL;
+	char *mnt_entry = NULL;
+	char *new_unexpanded_config = NULL;
+	char *tmp_unexpanded_config = NULL;
+	char *tmp = NULL;
+	int ret = 0;
+	size_t len = 0;
+	struct lxc_list *iterator;
+
+	cleanpath = strdup(newpath);
+	if (!cleanpath)
+		goto err;
+
+	remove_trailing_slashes(cleanpath);
+
+	ret = snprintf(old_work, MAXPATHLEN, "workdir=%s/%s", lxc_path, lxc_name);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		goto err;
+
+	ret = snprintf(new_work, MAXPATHLEN, "workdir=%s/%s", cleanpath, newname);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		goto err;
+
+	lxc_list_for_each(iterator, &lxc_conf->mount_list) {
+		mnt_entry = iterator->elem;
+		if (strstr(lxc_conf->unexpanded_config, mnt_entry)) {
+			if (strstr(mnt_entry, "overlay"))
+				tmp = "upperdir";
+			else if (strstr(mnt_entry, "aufs"))
+				tmp = "br";
+			if (!tmp)
+				continue;
+
+			ret = snprintf(old_upper, MAXPATHLEN, "%s=%s/%s", tmp, lxc_path, lxc_name);
+			if (ret < 0 || ret >= MAXPATHLEN)
+				goto err;
+
+			ret = snprintf(new_upper, MAXPATHLEN, "%s=%s/%s", tmp, cleanpath, newname);
+			if (ret < 0 || ret >= MAXPATHLEN)
+				goto err;
+
+			if (strstr(mnt_entry, old_upper))
+				tmp_unexpanded_config = lxc_string_replace(old_upper, new_upper, lxc_conf->unexpanded_config);
+
+			if (tmp_unexpanded_config && strstr(mnt_entry, old_work))
+				new_unexpanded_config = lxc_string_replace(old_work, new_work, tmp_unexpanded_config);
+
+			if (!new_unexpanded_config && !tmp_unexpanded_config)
+				continue;
+
+			if (new_unexpanded_config) {
+				free(lxc_conf->unexpanded_config);
+				lxc_conf->unexpanded_config = strdup(new_unexpanded_config);
+			} else if (tmp_unexpanded_config) {
+				free(lxc_conf->unexpanded_config);
+				lxc_conf->unexpanded_config = strdup(tmp_unexpanded_config);
+			}
+
+			if (lxc_conf->unexpanded_config) {
+				len = strlen(lxc_conf->unexpanded_config);
+				lxc_conf->unexpanded_len = len;
+				lxc_conf->unexpanded_alloced = len + 1;
+			}
+
+			free(new_unexpanded_config);
+			free(tmp_unexpanded_config);
+			new_unexpanded_config = NULL;
+			tmp_unexpanded_config = NULL;
+			tmp = NULL;
+
+			if (!lxc_conf->unexpanded_config)
+				goto err;
+		}
+	}
+	free(cleanpath);
+	return 0;
+
+err:
+	free(cleanpath);
+	INFO("%s", "Failed to update config file");
+	return -1;
+}
+
 static struct lxc_container *do_lxcapi_clone(struct lxc_container *c, const char *newname,
 		const char *lxcpath, int flags,
 		const char *bdevtype, const char *bdevdata, uint64_t newsize,
@@ -2953,7 +3052,9 @@ static struct lxc_container *do_lxcapi_clone(struct lxc_container *c, const char
 	fclose(fout);
 	c->lxc_conf->rootfs.path = origroot;
 
-	sprintf(newpath, "%s/%s/rootfs", lxcpath, newname);
+	ret = snprintf(newpath, MAXPATHLEN, "%s/%s/rootfs", lxcpath, newname);
+	if (ret < 0 || ret >= MAXPATHLEN)
+		goto out;
 	if (mkdir(newpath, 0755) < 0) {
 		SYSERROR("error creating %s", newpath);
 		goto out;
@@ -3009,9 +3110,14 @@ static struct lxc_container *do_lxcapi_clone(struct lxc_container *c, const char
 		}
 	}
 
+	// update absolute paths for union mount directories
+	if (update_union_mount_entry_paths(c2->lxc_conf, c->config_path, c->name, lxcpath, newname) < 0)
+		goto out;
+
 	// We've now successfully created c2's storage, so clear it out if we
 	// fail after this
 	storage_copied = 1;
+
 
 	if (!c2->save_config(c2, NULL))
 		goto out;
