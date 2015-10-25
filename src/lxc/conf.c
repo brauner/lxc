@@ -1850,12 +1850,14 @@ static char *ovl_get_rootfs_dir(const char *rootfs_path, size_t *rootfslen)
 	return rootfsdir;
 }
 
-static int mount_entry_create_overlay_dirs(const struct mntent *mntent,
+static int mount_entry_create_overlay_dirs(struct mntent *mntent,
 					   const struct lxc_rootfs *rootfs,
 					   const char *lxc_name,
 					   const char *lxc_path)
 {
 	char lxcpath[MAXPATHLEN];
+	char tmp[MAXPATHLEN];
+	char *ran_work = NULL;
 	char *rootfsdir = NULL;
 	char *upperdir = NULL;
 	char *workdir = NULL;
@@ -1902,11 +1904,26 @@ static int mount_entry_create_overlay_dirs(const struct mntent *mntent,
 				WARN("Failed to create upperdir");
 			}
 
-	if (workdir)
+	if (workdir) {
 		if ((strncmp(workdir, lxcpath, dirlen) == 0) && (strncmp(workdir, rootfsdir, rootfslen) != 0))
 			if (mkdir_p(workdir, 0755) < 0) {
 				WARN("Failed to create workdir");
 			}
+	} else {
+		ret = snprintf(tmp, MAXPATHLEN, ",workdir=%s/%s/workdirXXXXXX", lxc_path, lxc_name);
+		if (ret < 0 || ret >= MAXPATHLEN)
+			goto err;
+		/* Don't bother to create temporary workdir if we do not have
+		 * enough room to append it to mntent->mnt_opts later. */
+		if ((strlen(mntent->mnt_opts) + strlen(tmp)) >= LINELEN)
+			goto err;
+		/* tmp + 9 to skip ",workdir=" in string. */
+		ran_work = mkdtemp(tmp + 9);
+		if (!ran_work)
+			goto err;
+		/* tmp - 9 to regain ",workdir=" in string. */
+		strcat(mntent->mnt_opts, ran_work - 9);
+	}
 
 	fret = 0;
 
@@ -1978,7 +1995,7 @@ err:
 }
 
 
-static int mount_entry_create_dir_file(const struct mntent *mntent,
+static int mount_entry_create_dir_file(struct mntent *mntent,
 				       const char* path, const struct lxc_rootfs *rootfs,
 				       const char *lxc_name, const char *lxc_path)
 {
@@ -2123,7 +2140,7 @@ static int mount_file_entries(const struct lxc_rootfs *rootfs, FILE *file,
 	const char *lxc_name, const char *lxc_path)
 {
 	struct mntent mntent;
-	char buf[4096];
+	char buf[LINELEN];
 	int ret = -1;
 
 	while (getmntent_r(file, &mntent, buf, sizeof(buf))) {
@@ -3313,7 +3330,7 @@ int lxc_map_ids(struct lxc_list *idmap, pid_t pid)
 		int left, fill;
 		int had_entry = 0;
 		if (!buf) {
-			buf = pos = malloc(4096);
+			buf = pos = malloc(LINELEN);
 			if (!buf)
 				return -ENOMEM;
 		}
@@ -3330,7 +3347,7 @@ int lxc_map_ids(struct lxc_list *idmap, pid_t pid)
 				continue;
 
 			had_entry = 1;
-			left = 4096 - (pos - buf);
+			left = LINELEN - (pos - buf);
 			fill = snprintf(pos, left, "%s%lu %lu %lu%s",
 					use_shadow ? " " : "",
 					map->nsid, map->hostid, map->range,
@@ -3345,7 +3362,7 @@ int lxc_map_ids(struct lxc_list *idmap, pid_t pid)
 		if (!use_shadow) {
 			ret = write_id_mapping(type, pid, buf, pos-buf);
 		} else {
-			left = 4096 - (pos - buf);
+			left = LINELEN - (pos - buf);
 			fill = snprintf(pos, left, "\n");
 			if (fill <= 0 || fill >= left)
 				SYSERROR("snprintf failed, too many mappings");
