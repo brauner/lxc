@@ -26,11 +26,19 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <stdlib.h>
+#include <termios.h>
+#include <unistd.h>
+
+#include <lxc/lxccontainer.h>
 
 #include "attach.h"
 #include "arguments.h"
+# include "commands.h"
+#include "conf.h"
 #include "config.h"
 #include "confile.h"
+#include "console.h"
+#include "mainloop.h"
 #include "namespace.h"
 #include "caps.h"
 #include "log.h"
@@ -186,12 +194,163 @@ Options :\n\
 	.checker  = NULL,
 };
 
+struct wrapargs {
+	int master;
+	int slave;
+	lxc_attach_command_t *cmd;
+};
+
+static int attach_callback(void *p)
+{
+	struct wrapargs *args = p;
+
+	close(args->master);
+	setsid();
+	ioctl(args->slave, TIOCSCTTY, NULL);
+	dup2(args->slave, 0);
+	dup2(args->slave, 1);
+	dup2(args->slave, 2);
+
+	if (args->cmd && args->cmd->program)
+		execvp(args->cmd->program, args->cmd->argv);
+	else
+		lxc_attach_run_shell(NULL);
+
+	return -1;
+}
+
+/*
+ * Disclaimer: This is a total draft (e.g. the current sigwinch handler taken
+ * from console.{c,h} is not working yet.).
+ *
+ * This solution opens a pty (master & slave) on the host and passes the fds
+ * (master & slave) to the container. We then pass attach_callback() to
+ * lxc_attach(), close the master fd and call lxc_attach_run_shell() in
+ * attach_callback() to run a shell on the slave side in the container. The
+ * disadvantage is that for unprivileged containers the shell we are calling
+ * lxc-attach from must be in the unprivileged users cgroup because we need to
+ * be allowed to move the pid of the attached shell to the containers cgroup.
+ */
+static int lxc_get_pty(struct lxc_container *c, lxc_attach_options_t *att,
+		int *pid)
+{
+	int ret, masterfd;
+	struct lxc_epoll_descr descr;
+	struct termios oldtios;
+	struct lxc_tty_state *ts;
+	struct wrapargs args;
+	struct lxc_attach_command_t cmd;
+
+	if (!isatty(STDIN_FILENO)) {
+		ERROR("stdin is not a tty");
+		return -1;
+	}
+
+	ret = setup_tios(STDIN_FILENO, &oldtios);
+	if (ret) {
+		ERROR("failed to setup tios");
+		return -1;
+	}
+
+	/* Create pty on the host. lxc_console_create() will do this for us.
+	 *
+	 * It is similiar to how we setup a console on container start with
+	 * lxc-start -n CONTAINER -F
+	 * Comparison with lxc-console: When we use lxc-console to get a console
+	 * in the container it will allocate one of the ttys we set up in the
+	 * container on startup. This is done by run lxc_cmd_console() here
+	 * instead of lxc_console_create(). */
+	if (lxc_console_create(c->lxc_conf) < 0)
+		goto err1;
+
+	/* Shift tty to container. */
+	ttys_shift_ids(c->lxc_conf);
+
+	masterfd = c->lxc_conf->console.master;
+
+	ret = setsid();
+	if (ret)
+		INFO("already group leader");
+
+	/* Not correctly implemented yet. */
+	ts = lxc_console_sigwinch_init(STDIN_FILENO, masterfd);
+	if (!ts) {
+		ret = -1;
+		goto err2;
+	}
+	ts->escape = -1;
+	ts->winch_proxy = c->name;
+	ts->winch_proxy_lxcpath = c->config_path;
+
+	lxc_console_winsz(STDIN_FILENO, masterfd);
+	lxc_cmd_console_winch(ts->winch_proxy, ts->winch_proxy_lxcpath);
+
+	/* Passing master and slave fd to attach_callback(). We run a shell
+	 * under the slave. */
+	args.master = masterfd;
+	args.slave = c->lxc_conf->console.slave;
+	args.cmd = NULL;
+	if (my_args.argc > 0) {
+		cmd.program = my_args.argv[0];
+		cmd.argv = (char**)my_args.argv;
+		args.cmd = &cmd;
+	}
+	c->attach(c, attach_callback, &args, att, pid);
+	close(c->lxc_conf->console.slave); /* Close slave side. */
+
+	/* Setting up the epoll-mainloop. */
+	ret = lxc_mainloop_open(&descr);
+	if (ret) {
+		ERROR("failed to create mainloop");
+		goto err3;
+	}
+
+	ret = lxc_mainloop_add_handler(&descr, ts->sigfd,
+			lxc_console_cb_sigwinch_fd, ts); /* Ignore the sigwinch handler for now. */
+	if (ret) {
+		ERROR("failed to add handler for SIGWINCH fd");
+		goto err4;
+	}
+
+	ret = lxc_mainloop_add_handler(&descr, ts->stdinfd,
+			lxc_console_cb_tty_stdin, ts);
+	if (ret) {
+		ERROR("failed to add handler for stdinfd");
+		goto err4;
+	}
+
+	ret = lxc_mainloop_add_handler(&descr, ts->masterfd,
+			lxc_console_cb_tty_master, ts);
+	if (ret) {
+		ERROR("failed to add handler for masterfd");
+		goto err4;
+	}
+
+	ret = lxc_mainloop(&descr, -1);
+	if (ret) {
+		ERROR("mainloop returned an error");
+		goto err4;
+	}
+
+	ret = 0;
+
+err4:
+	lxc_mainloop_close(&descr);
+err3:
+	lxc_console_sigwinch_fini(ts);
+err2:
+	close(masterfd);
+err1:
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &oldtios);
+
+	return ret;
+}
+
 int main(int argc, char *argv[])
 {
 	int ret;
 	pid_t pid;
 	lxc_attach_options_t attach_options = LXC_ATTACH_OPTIONS_DEFAULT;
-	lxc_attach_command_t command;
 
 	ret = lxc_caps_init();
 	if (ret)
@@ -220,13 +379,14 @@ int main(int argc, char *argv[])
 	attach_options.extra_env_vars = extra_env;
 	attach_options.extra_keep_env = extra_keep;
 
-	if (my_args.argc) {
-		command.program = my_args.argv[0];
-		command.argv = (char**)my_args.argv;
-		ret = lxc_attach(my_args.name, my_args.lxcpath[0], lxc_attach_run_command, &command, &attach_options, &pid);
-	} else {
-		ret = lxc_attach(my_args.name, my_args.lxcpath[0], lxc_attach_run_shell, NULL, &attach_options, &pid);
-	}
+	struct lxc_container *c;
+	c = lxc_container_new(my_args.name, my_args.lxcpath[0]);
+	if (!c)
+		goto out;
+
+	lxc_get_pty(c, &attach_options, &pid);
+
+	lxc_container_put(c);
 
 	if (ret < 0)
 		return 1;
@@ -238,5 +398,6 @@ int main(int argc, char *argv[])
 	if (WIFEXITED(ret))
 		return WEXITSTATUS(ret);
 
+out:
 	return 1;
 }

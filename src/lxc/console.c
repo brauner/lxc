@@ -36,6 +36,7 @@
 #include "log.h"
 #include "conf.h"
 #include "config.h"
+#include "console.h"
 #include "start.h" 	/* for struct lxc_handler */
 #include "caps.h"
 #include "commands.h"
@@ -55,19 +56,6 @@ lxc_log_define(lxc_console, lxc);
 static struct lxc_list lxc_ttys;
 
 typedef void (*sighandler_t)(int);
-struct lxc_tty_state
-{
-	struct lxc_list node;
-	int stdinfd;
-	int stdoutfd;
-	int masterfd;
-	int escape;
-	int saw_escape;
-	const char *winch_proxy;
-	const char *winch_proxy_lxcpath;
-	int sigfd;
-	sigset_t oldmask;
-};
 
 __attribute__((constructor))
 void lxc_console_init(void)
@@ -80,7 +68,7 @@ void lxc_console_init(void)
  * @srcfd : terminal to get size from (typically a slave pty)
  * @dstfd : terminal to set size on (typically a master pty)
  */
-static void lxc_console_winsz(int srcfd, int dstfd)
+void lxc_console_winsz(int srcfd, int dstfd)
 {
 	struct winsize wsz;
 	if (isatty(srcfd) && ioctl(srcfd, TIOCGWINSZ, &wsz) == 0) {
@@ -110,8 +98,8 @@ void lxc_console_sigwinch(int sig)
 	}
 }
 
-static int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
-				      struct lxc_epoll_descr *descr)
+int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
+		struct lxc_epoll_descr *descr)
 {
 	struct signalfd_siginfo siginfo;
 	struct lxc_tty_state *ts = cbdata;
@@ -145,7 +133,7 @@ static int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
  * prevent lxc_ttys list corruption, but using the fd we can provide the
  * tty_state needed to the callback (lxc_console_cb_sigwinch_fd()).
  */
-static struct lxc_tty_state *lxc_console_sigwinch_init(int srcfd, int dstfd)
+struct lxc_tty_state *lxc_console_sigwinch_init(int srcfd, int dstfd)
 {
 	sigset_t mask;
 	struct lxc_tty_state *ts;
@@ -200,7 +188,7 @@ out:
  * Must be called with process_lock held to protect the lxc_ttys list, or
  * from a non-threaded context.
  */
-static void lxc_console_sigwinch_fini(struct lxc_tty_state *ts)
+void lxc_console_sigwinch_fini(struct lxc_tty_state *ts)
 {
 	if (ts->sigfd >= 0) {
 		close(ts->sigfd);
@@ -302,7 +290,7 @@ int lxc_console_mainloop_add(struct lxc_epoll_descr *descr,
 	return 0;
 }
 
-static int setup_tios(int fd, struct termios *oldtios)
+int setup_tios(int fd, struct termios *oldtios)
 {
 	struct termios newtios;
 
@@ -629,8 +617,8 @@ int lxc_console_set_stdfds(struct lxc_handler *handler)
 	return 0;
 }
 
-static int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
-				    struct lxc_epoll_descr *descr)
+int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
+		struct lxc_epoll_descr *descr)
 {
 	struct lxc_tty_state *ts = cbdata;
 	char c;
@@ -641,16 +629,19 @@ static int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
 		return 1;
 	}
 
-	/* we want to exit the console with Ctrl+a q */
-	if (c == ts->escape && !ts->saw_escape) {
-		ts->saw_escape = 1;
-		return 0;
+	if (ts->escape != -1) {
+		/* we want to exit the console with Ctrl+a q */
+		if (c == ts->escape && !ts->saw_escape) {
+			ts->saw_escape = 1;
+			return 0;
+		}
+
+		if (c == 'q' && ts->saw_escape)
+			return 1;
+
+		ts->saw_escape = 0;
 	}
 
-	if (c == 'q' && ts->saw_escape)
-		return 1;
-
-	ts->saw_escape = 0;
 	if (write(ts->masterfd, &c, 1) < 0) {
 		SYSERROR("failed to write");
 		return 1;
@@ -659,8 +650,8 @@ static int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
 	return 0;
 }
 
-static int lxc_console_cb_tty_master(int fd, uint32_t events, void *cbdata,
-				     struct lxc_epoll_descr *descr)
+int lxc_console_cb_tty_master(int fd, uint32_t events, void *cbdata,
+		struct lxc_epoll_descr *descr)
 {
 	struct lxc_tty_state *ts = cbdata;
 	char buf[1024];
