@@ -36,6 +36,7 @@
 #include "log.h"
 #include "conf.h"
 #include "config.h"
+#include "console.h"
 #include "start.h" 	/* for struct lxc_handler */
 #include "caps.h"
 #include "commands.h"
@@ -55,20 +56,6 @@ lxc_log_define(lxc_console, lxc);
 static struct lxc_list lxc_ttys;
 
 typedef void (*sighandler_t)(int);
-struct lxc_tty_state
-{
-	struct lxc_list node;
-	int stdinfd;
-	int stdoutfd;
-	int masterfd;
-	int escape;
-	int saw_escape;
-	const char *winch_proxy;
-	const char *winch_proxy_lxcpath;
-	int sigfd;
-	sigset_t oldmask;
-	bool report_error;
-};
 
 __attribute__((constructor))
 void lxc_console_init(void)
@@ -81,7 +68,7 @@ void lxc_console_init(void)
  * @srcfd : terminal to get size from (typically a slave pty)
  * @dstfd : terminal to set size on (typically a master pty)
  */
-static void lxc_console_winsz(int srcfd, int dstfd)
+void lxc_console_winsz(int srcfd, int dstfd)
 {
 	struct winsize wsz;
 	if (isatty(srcfd) && ioctl(srcfd, TIOCGWINSZ, &wsz) == 0) {
@@ -111,8 +98,8 @@ void lxc_console_sigwinch(int sig)
 	}
 }
 
-static int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
-				      struct lxc_epoll_descr *descr)
+int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
+		struct lxc_epoll_descr *descr)
 {
 	struct signalfd_siginfo siginfo;
 	struct lxc_tty_state *ts = cbdata;
@@ -146,7 +133,7 @@ static int lxc_console_cb_sigwinch_fd(int fd, uint32_t events, void *cbdata,
  * prevent lxc_ttys list corruption, but using the fd we can provide the
  * tty_state needed to the callback (lxc_console_cb_sigwinch_fd()).
  */
-static struct lxc_tty_state *lxc_console_sigwinch_init(int srcfd, int dstfd)
+struct lxc_tty_state *lxc_console_sigwinch_init(int srcfd, int dstfd)
 {
 	sigset_t mask;
 	struct lxc_tty_state *ts;
@@ -202,7 +189,7 @@ out:
  * Must be called with process_lock held to protect the lxc_ttys list, or
  * from a non-threaded context.
  */
-static void lxc_console_sigwinch_fini(struct lxc_tty_state *ts)
+void lxc_console_sigwinch_fini(struct lxc_tty_state *ts)
 {
 	if (ts->sigfd >= 0) {
 		close(ts->sigfd);
@@ -304,7 +291,7 @@ int lxc_console_mainloop_add(struct lxc_epoll_descr *descr,
 	return 0;
 }
 
-static int setup_tios(int fd, struct termios *oldtios)
+int lxc_setup_tios(int fd, struct termios *oldtios)
 {
 	struct termios newtios;
 
@@ -384,7 +371,7 @@ static int lxc_console_peer_proxy_alloc(struct lxc_console *console, int sockfd)
 		return -1;
 	}
 
-	if (setup_tios(console->peerpty.slave, &oldtermio) < 0)
+	if (lxc_setup_tios(console->peerpty.slave, &oldtermio) < 0)
 		goto err1;
 
 	ts = lxc_console_sigwinch_init(console->peerpty.master, console->master);
@@ -523,7 +510,7 @@ static void lxc_console_peer_default(struct lxc_console *console)
 		goto err1;
 	}
 
-	if (setup_tios(console->peer, console->tios) < 0)
+	if (lxc_setup_tios(console->peer, console->tios) < 0)
 		goto err2;
 
 	return;
@@ -718,7 +705,7 @@ int lxc_console(struct lxc_container *c, int ttynum,
 		return -1;
 	}
 
-	ret = setup_tios(stdinfd, &oldtios);
+	ret = lxc_setup_tios(stdinfd, &oldtios);
 	if (ret) {
 		ERROR("failed to setup tios");
 		return -1;
