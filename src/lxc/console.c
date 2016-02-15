@@ -67,6 +67,7 @@ struct lxc_tty_state
 	const char *winch_proxy_lxcpath;
 	int sigfd;
 	sigset_t oldmask;
+	bool report_error;
 };
 
 __attribute__((constructor))
@@ -158,6 +159,7 @@ static struct lxc_tty_state *lxc_console_sigwinch_init(int srcfd, int dstfd)
 	ts->stdinfd  = srcfd;
 	ts->masterfd = dstfd;
 	ts->sigfd    = -1;
+	ts->report_error = true; // report read-write failures as SYSERROR()
 
 	/* add tty to list to be scanned at SIGWINCH time */
 	lxc_list_add_elem(&ts->node, ts);
@@ -637,7 +639,10 @@ static int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
 
 	assert(fd == ts->stdinfd);
 	if (read(ts->stdinfd, &c, 1) < 0) {
-		SYSERROR("failed to read");
+		if (ts->report_error)
+			SYSERROR("failed to read");
+		else
+			INFO("failed to read");
 		return 1;
 	}
 
@@ -652,7 +657,10 @@ static int lxc_console_cb_tty_stdin(int fd, uint32_t events, void *cbdata,
 
 	ts->saw_escape = 0;
 	if (write(ts->masterfd, &c, 1) < 0) {
-		SYSERROR("failed to write");
+		if (ts->report_error)
+			SYSERROR("failed to write");
+		else
+			INFO("failed to write");
 		return 1;
 	}
 
@@ -669,13 +677,19 @@ static int lxc_console_cb_tty_master(int fd, uint32_t events, void *cbdata,
 	assert(fd == ts->masterfd);
 	r = read(fd, buf, sizeof(buf));
 	if (r < 0) {
-		SYSERROR("failed to read");
+		if (ts->report_error)
+			SYSERROR("failed to read");
+		else
+			INFO("failed to read");
 		return 1;
 	}
 
 	w = write(ts->stdoutfd, buf, r);
 	if (w < 0 || w != r) {
-		SYSERROR("failed to write");
+		if (ts->report_error)
+			SYSERROR("failed to write");
+		else
+			INFO("failed to write");
 		return 1;
 	}
 
