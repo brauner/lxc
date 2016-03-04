@@ -143,6 +143,7 @@ Common options :\n\
   -o, --logfile=FILE               Output log to FILE instead of stderr\n\
   -l, --logpriority=LEVEL          Set log priority to LEVEL\n\
   -q, --quiet                      Don't produce any output\n\
+      --terse                      print minimal, machine-readable output\n\
   -P, --lxcpath=PATH               Use specified container path\n\
   -?, --help                       Give this help list\n\
       --usage                      Give a short usage message\n\
@@ -199,20 +200,39 @@ extern int lxc_arguments_parse(struct lxc_arguments *args,
 		if (c == -1)
 			break;
 		switch (c) {
-		case 'n': 	args->name = optarg; break;
-		case 'o':	args->log_file = optarg; break;
-		case 'l':	args->log_priority = optarg; break;
-		case 'q':	args->quiet = 1; break;
+		case 'n':
+			args->name = optarg;
+			break;
+		case 'o':
+			args->log_file = optarg;
+			break;
+		case 'l':
+			args->log_priority = optarg;
+			break;
+		case 'q':
+			args->quiet = 1;
+			break;
+		case OPT_TERSE:
+			args->terse = 1;
+			break;
 		case 'P':
 			remove_trailing_slashes(optarg);
 			ret = lxc_arguments_lxcpath_add(args, optarg);
 			if (ret < 0)
 				return ret;
 			break;
-		case OPT_USAGE: print_usage(args->options, args);
-		case OPT_VERSION: print_version();
-		case '?':	print_help(args, 1);
-		case 'h': 	print_help(args, 0);
+		case OPT_USAGE:
+			print_usage(args->options, args);
+			/* deliberate fall through: print_usage() exits() for us */
+		case OPT_VERSION:
+			print_version();
+			/* deliberate fall through: print_version() exits() for us */
+		case '?':
+			print_help(args, 1);
+			/* deliberate fall through: print_help() exits() for us */
+		case 'h':
+			print_help(args, 0);
+			/* deliberate fall through: print_help() exits() for us */
 		default:
 			if (args->parser) {
 				ret = args->parser(args, c, optarg);

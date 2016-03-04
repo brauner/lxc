@@ -58,6 +58,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
     </varlistentry>
 
     <varlistentry>
+      <term><option> --terse</option></term>
+      <listitem>
+	<para>
+        print minimal, machine-readable output
+	</para>
+      </listitem>
+    </varlistentry>
+
+    <varlistentry>
       <term><option>-P, --lxcpath=<replaceable>PATH</replaceable></option></term>
       <listitem>
 	<para>

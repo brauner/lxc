@@ -47,6 +47,7 @@ struct lxc_arguments {
 	char *log_file;
 	char *log_priority;
 	int quiet;
+	int terse;
 	int daemonize;
 	const char *rcfile;
 	const char *console;
@@ -145,6 +146,7 @@ struct lxc_arguments {
 	{"usage", no_argument,	0, OPT_USAGE}, \
 	{"version", no_argument,	0, OPT_VERSION}, \
 	{"quiet", no_argument,	0, 'q'}, \
+	{"terse", no_argument,	0, OPT_TERSE}, \
 	{"logfile", required_argument, 0, 'o'}, \
 	{"logpriority", required_argument, 0, 'l'}, \
 	{"lxcpath", required_argument, 0, 'P'}, \
@@ -153,6 +155,7 @@ struct lxc_arguments {
 /* option keys for long only options */
 #define	OPT_USAGE 0x1000
 #define	OPT_VERSION OPT_USAGE-1
+#define	OPT_TERSE OPT_USAGE-2
 
 extern int lxc_arguments_parse(struct lxc_arguments *args,
 			       int argc, char *const argv[]);
