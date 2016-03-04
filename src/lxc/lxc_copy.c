@@ -173,14 +173,14 @@ int main(int argc, char *argv[])
 
 	if (geteuid()) {
 		if (access(my_args.lxcpath[0], O_RDWR) < 0) {
-			if (!my_args.quiet)
+			if (!my_args.quiet || !my_args.terse)
 				fprintf(stderr, "You lack access to %s\n", my_args.lxcpath[0]);
 			exit(ret);
 		}
 	}
 
 	if (!my_args.newname && !(my_args.task == DESTROY)) {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			printf("Error: You must provide a NEWNAME for the clone.\n");
 		exit(ret);
 	}
@@ -200,13 +200,13 @@ int main(int argc, char *argv[])
 		exit(ret);
 
 	if (!c->may_control(c)) {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			fprintf(stderr, "Insufficent privileges to control %s\n", c->name);
 		goto out;
 	}
 
 	if (!c->is_defined(c)) {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			fprintf(stderr, "Error: container %s is not defined\n", c->name);
 		goto out;
 	}
@@ -354,10 +354,17 @@ static int do_clone(struct lxc_container *c, char *newname, char *newpath,
 	clone = c->clone(c, newname, newpath, flags, bdevtype, NULL, fssize,
 			 args);
 	if (!clone) {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			fprintf(stderr, "clone failed\n");
 		return -1;
 	}
+
+	if (!my_args.quiet && !my_args.terse)
+		printf("Created %s as %s of %s\n", newname, task ? "snapshot" : "copy", c->name);
+	else if (!my_args.quiet && my_args.terse)
+		/* Only print the name of the new container when the --terse is
+		 * requested. */
+		printf("%s\n", newname);
 
 	INFO("Created %s as %s of %s\n", newname, task ? "snapshot" : "copy", c->name);
 
@@ -420,8 +427,12 @@ static int do_clone_ephemeral(struct lxc_container *c,
 	if (!clone->save_config(clone, NULL))
 		goto destroy_and_put;
 
-	if (!my_args.quiet)
+	if (!my_args.quiet && !my_args.terse)
 		printf("Created %s as clone of %s\n", arg->newname, arg->name);
+	else if (!my_args.quiet && my_args.terse)
+		/* Only print the name of the new container when the --terse is
+		 * requested. */
+		printf("%s\n", arg->newname);
 
 	if (!arg->daemonize && arg->argc) {
 		clone->want_daemonize(clone, true);
@@ -514,7 +525,7 @@ static uint64_t get_fssize(char *s)
 
 	ret = strtoull(s, &end, 0);
 	if (end == s) {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			fprintf(stderr, "Invalid blockdev size '%s', using default size\n", s);
 		return 0;
 	}
@@ -533,7 +544,7 @@ static uint64_t get_fssize(char *s)
 	} else if (*end == 't' || *end == 'T') {
 		ret *= 1024ULL * 1024ULL * 1024ULL * 1024ULL;
 	} else {
-		if (!my_args.quiet)
+		if (!my_args.quiet || !my_args.terse)
 			fprintf(stderr, "Invalid blockdev unit size '%c' in '%s', " "using default size\n", *end, s);
 		return 0;
 	}
