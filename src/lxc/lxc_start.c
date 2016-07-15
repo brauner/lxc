@@ -151,6 +151,7 @@ static int my_parser(struct lxc_arguments* args, int c, char* arg)
 	case 'C': args->close_all_fds = 1; break;
 	case 's': return lxc_config_define_add(&defines, arg);
 	case 'p': args->pidfile = arg; break;
+	case 'i': args->init_args = arg; break;
 	case OPT_SHARE_NET: args->share_ns[LXC_NS_NET] = arg; break;
 	case OPT_SHARE_IPC: args->share_ns[LXC_NS_IPC] = arg; break;
 	case OPT_SHARE_UTS: args->share_ns[LXC_NS_UTS] = arg; break;
@@ -170,6 +171,7 @@ static const struct option my_longopts[] = {
 	{"share-net", required_argument, 0, OPT_SHARE_NET},
 	{"share-ipc", required_argument, 0, OPT_SHARE_IPC},
 	{"share-uts", required_argument, 0, OPT_SHARE_UTS},
+	{"init-args", required_argument, 0, 'i'},
 	LXC_COMMON_OPTIONS
 };
 
@@ -192,6 +194,7 @@ Options :\n\
                          If not specified, exit with failure instead\n\
                          Note: --daemon implies --close-all-fds\n\
   -s, --define KEY=VAL   Assign VAL to configuration variable KEY\n\
+  -i, --init-args        Arguments to be passed to /sbin/init\n\
       --share-[net|ipc|uts]=NAME Share a namespace with another container or pid\n\
 ",
 	.options   = my_longopts,
@@ -207,9 +210,10 @@ int main(int argc, char *argv[])
 	struct lxc_conf *conf;
 	char *const *args;
 	char *rcfile = NULL;
-	char *const default_args[] = {
+	char *default_args[] = {
 		"/sbin/init",
 		NULL,
+		NULL, /* start() expects argv format. */
 	};
 	struct lxc_container *c;
 
@@ -335,10 +339,14 @@ int main(int argc, char *argv[])
 	if (my_args.close_all_fds)
 		c->want_close_all_fds(c, true);
 
-	if (args == default_args)
+	if (my_args.init_args) {
+		default_args[1] = my_args.init_args;
+		err = c->start(c, 0, default_args) ? 0 : 1;
+	} else if (args == default_args) {
 		err = c->start(c, 0, NULL) ? 0 : 1;
-	else
+	} else {
 		err = c->start(c, 0, args) ? 0 : 1;
+	}
 
 	if (err) {
 		ERROR("The container failed to start.");

@@ -55,6 +55,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
       <arg choice="opt">-L <replaceable>console_logfile</replaceable></arg>
       <arg choice="opt">-d</arg>
       <arg choice="opt">-F</arg>
+      <arg choice="opt">-i <replaceable>init_args</replaceable></arg>
       <arg choice="opt">-p <replaceable>pid_file</replaceable></arg>
       <arg choice="opt">-s KEY=VAL</arg>
       <arg choice="opt">-C</arg>
@@ -79,10 +80,16 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
       defined, the default isolation is used.
     </para>
     <para>
-      If no command is specified, <command>lxc-start</command> will
-      use the command defined in lxc.init_cmd or if not set, the default
-      <command>"/sbin/init"</command> command to run a system
+      If no <replaceable>command</replaceable> is specified,
+      <command>lxc-start</command> will use the
+      <replaceable>command</replaceable> defined in lxc.init_cmd or if not set,
+      the default <command>"/sbin/init"</command> command to run a system
       container.
+    </para>
+    <para>
+      Additional arguments to be passed to the default init can be specified with
+      <replaceable>-i</replaceable>. In this case
+      <replaceable>command</replaceable> will be ignored.
     </para>
 
   </refsect1>
@@ -115,6 +122,17 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 	    Run the container in the foreground. In this mode, the container
 	    console will be attached to the current tty and signals will be routed
 	    directly to the container.
+	  </para>
+	</listitem>
+      </varlistentry>
+
+      <varlistentry>
+	<term>
+	  <option>-i, --init-args</option>
+	</term>
+	<listitem>
+	  <para>
+	    Pass additional arguments to the default init command.
 	  </para>
 	</listitem>
       </varlistentry>

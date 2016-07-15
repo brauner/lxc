@@ -59,6 +59,7 @@ struct lxc_arguments {
 
 	/* for lxc-start */
 	const char *share_ns[32]; // size must be greater than LXC_NS_MAX
+	char *init_args;
 
 	/* for lxc-console */
 	int ttynum;
