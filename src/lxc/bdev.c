@@ -2215,7 +2215,7 @@ static char *detect_overlayfs_name(void)
 //
 static int overlayfs_mount(struct bdev *bdev)
 {
-	char *options, *dup, *lower, *upper;
+	char *tmp, *options, *dup, *lower, *upper;
 	char *options_work, *work, *lastslash;
 	int lastslashidx;
 	int len, len2;
@@ -2228,16 +2228,24 @@ static int overlayfs_mount(struct bdev *bdev)
 	if (!bdev->src || !bdev->dest)
 		return -22;
 
-	if (!overlayfs_name)
-		overlayfs_name = detect_overlayfs_name();
+	if (!ovl_name)
+		ovl_name = ovl_detect_name();
 
-	//  separately mount it first
-	//  mount -t overlayfs -oupperdir=${upper},lowerdir=${lower} lower dest
-	dup = alloca(strlen(bdev->src)+1);
+	/*
+	 * separately mount it first:
+	 * mount -t overlayfs * -oupperdir=${upper},lowerdir=${lower} lower dest
+	 */
+	dup = alloca(strlen(bdev->src) + 1);
 	strcpy(dup, bdev->src);
-	if (!(lower = strchr(dup, ':')))
-		return -22;
-	if (!(upper = strchr(++lower, ':')))
+	/* support multiple lower layers */
+	if (!(lower = strstr(dup, ":/")))
+			return -22;
+	lower++;
+	upper = lower;
+	while ((tmp = strstr(++upper, ":/"))) {
+		upper = tmp;
+	}
+	if (--upper == lower)
 		return -22;
 	*upper = '\0';
 	upper++;
@@ -2246,9 +2254,13 @@ static int overlayfs_mount(struct bdev *bdev)
 	if (mkdir_p(upper, 0755) < 0 && errno != EEXIST)
 		return -22;
 
-	// overlayfs.v22 or higher needs workdir option
-	// if upper is /var/lib/lxc/c2/delta0,
-	// then workdir is /var/lib/lxc/c2/olwork
+	/*
+	 * overlayfs.v22 or higher needs workdir option:
+	 * if upper is
+	 *	/var/lib/lxc/c2/delta0
+	 * then workdir is
+	 *	/var/lib/lxc/c2/olwork
+	 */
 	lastslash = strrchr(upper, '/');
 	if (!lastslash)
 		return -22;
@@ -2256,8 +2268,8 @@ static int overlayfs_mount(struct bdev *bdev)
 	lastslashidx = lastslash - upper;
 
 	work = alloca(lastslashidx + 7);
-	strncpy(work, upper, lastslashidx+7);
-	strcpy(work+lastslashidx, "olwork");
+	strncpy(work, upper, lastslashidx + 7);
+	strcpy(work + lastslashidx, "olwork");
 
 	if (parse_mntopts(bdev->mntopts, &mntflags, &mntdata) < 0) {
 		free(mntdata);
@@ -2269,8 +2281,11 @@ static int overlayfs_mount(struct bdev *bdev)
 		return -22;
 	}
 
-	// TODO We should check whether bdev->src is a blockdev, and if so
-	// but for now, only support overlays of a basic directory
+	/*
+	 * TODO:
+	 * We should check whether bdev->src is a blockdev but for now only
+	 * support overlays of a basic directory
+	 */
 
 	if (mntdata) {
 		len = strlen(lower) + strlen(upper) + strlen("upperdir=,lowerdir=,") + strlen(mntdata) + 1;
@@ -2282,8 +2297,7 @@ static int overlayfs_mount(struct bdev *bdev)
 		options_work = alloca(len2);
 		ret2 = snprintf(options, len2, "upperdir=%s,lowerdir=%s,workdir=%s,%s",
 				upper, lower, work, mntdata);
-	}
-	else {
+	} else {
 		len = strlen(lower) + strlen(upper) + strlen("upperdir=,lowerdir=") + 1;
 		options = alloca(len);
 		ret = snprintf(options, len, "upperdir=%s,lowerdir=%s", upper, lower);
@@ -2294,29 +2308,35 @@ static int overlayfs_mount(struct bdev *bdev)
 		ret2 = snprintf(options_work, len2, "upperdir=%s,lowerdir=%s,workdir=%s",
 			upper, lower, work);
 	}
+
 	if (ret < 0 || ret >= len || ret2 < 0 || ret2 >= len2) {
 		free(mntdata);
 		return -1;
 	}
 
-	// mount without workdir option for overlayfs before v21
-	ret = mount(lower, bdev->dest, overlayfs_name, MS_MGC_VAL | mntflags, options);
+        /* Assume we need a workdir as we are on a overlay version >= v22. */
+	ret = ovl_remount_on_enodev(lower, bdev->dest, ovl_name,
+				    MS_MGC_VAL | mntflags, options_work);
 	if (ret < 0) {
-		INFO("overlayfs: error mounting %s onto %s options %s. retry with workdir",
-			lower, bdev->dest, options);
+		INFO("Overlayfs: Error mounting %s onto %s with options %s. "
+		     "Retrying without workdir: %s.",
+		     lower, bdev->dest, options_work, strerror(errno));
 
-		// retry with workdir option for overlayfs v22 and higher
-		ret = mount(lower, bdev->dest, overlayfs_name, MS_MGC_VAL | mntflags, options_work);
+                /* Assume we cannot use a workdir as we are on a version <= v21. */
+		ret = ovl_remount_on_enodev(lower, bdev->dest, ovl_name,
+					  MS_MGC_VAL | mntflags, options);
 		if (ret < 0)
-			SYSERROR("overlayfs: error mounting %s onto %s options %s",
-				lower, bdev->dest, options_work);
+			SYSERROR("Overlayfs: Error mounting %s onto %s with "
+				 "options %s: %s.",
+				 lower, bdev->dest, options,
+				 strerror(errno));
 		else
-			INFO("overlayfs: mounted %s onto %s options %s",
-				lower, bdev->dest, options_work);
+			INFO("Overlayfs: Mounted %s onto %s with options %s.",
+			     lower, bdev->dest, options);
+	} else {
+		INFO("Overlayfs: Mounted %s onto %s with options %s.", lower,
+		     bdev->dest, options_work);
 	}
-	else
-		INFO("overlayfs: mounted %s onto %s options %s",
-			lower, bdev->dest, options);
 	return ret;
 }
 
