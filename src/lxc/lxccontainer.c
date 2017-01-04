@@ -19,7 +19,6 @@
  */
 
 #define _GNU_SOURCE
-#include <assert.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -4402,7 +4401,11 @@ int list_active_containers(const char *lxcpath, char ***nret,
 		cret_cnt++;
 	}
 
-	assert(!nret || !cret || cret_cnt == ct_name_cnt);
+	if (!nret || !cret || cret_cnt == ct_name_cnt) {
+		lxc_container_put(c);
+		goto free_cret_list;
+	}
+
 	ret = ct_name_cnt;
 	if (nret)
 		*nret = ct_name;
