@@ -862,6 +862,7 @@ static int do_ns_attach(void *args)
 {
 	int pid, ret;
 	struct lsm_label_fd_data *data = args;
+	bool attach_pidns, attach_userns;
 
 	ret = prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 	if (ret < 0) {
@@ -869,16 +870,22 @@ static int do_ns_attach(void *args)
 		return -1;
 	}
 
-	ret = setns(data->init_ctx->ns_fd[LXC_NS_USER], CLONE_NEWUSER);
-	if (ret < 0) {
-		SYSERROR("Failed to attach to user namespace");
-		return -1;
+	attach_userns = (data->init_ctx->ns_fd[LXC_NS_USER] >= 0);
+	if (attach_userns) {
+		ret = setns(data->init_ctx->ns_fd[LXC_NS_USER], CLONE_NEWUSER);
+		if (ret < 0) {
+			SYSERROR("Failed to attach to user namespace");
+			return -1;
+		}
 	}
 
-	ret = setns(data->init_ctx->ns_fd[LXC_NS_PID], CLONE_NEWPID);
-	if (ret < 0) {
-		SYSERROR("Failed to attach to pid namespace");
-		return -1;
+	attach_pidns = (data->init_ctx->ns_fd[LXC_NS_PID] >= 0);
+	if (attach_pidns) {
+		ret = setns(data->init_ctx->ns_fd[LXC_NS_PID], CLONE_NEWPID);
+		if (ret < 0) {
+			SYSERROR("Failed to attach to pid namespace");
+			return -1;
+		}
 	}
 
 	ret = lxc_switch_uid_gid(0, 0);
@@ -888,6 +895,19 @@ static int do_ns_attach(void *args)
 	ret = lxc_setgroups(0, NULL);
 	if (ret < 0)
 		return -1;
+
+	if (!attach_pidns) {
+		/* We're now attached to the correct user namespace so try to
+		 * open the lsm label fd again.
+		 */
+		int on_exec = data->options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
+		ret = lsm_open(data->attached_pid, on_exec);
+		if (ret < 0)
+			return -1;
+
+		data->lsm_labelfd = ret;
+		return 0;
+	}
 
 	pid = lxc_clone(do_lsm_label_fd_get, data,
 			CLONE_VM | CLONE_FILES | CLONE_NEWNS);
@@ -906,13 +926,26 @@ static int do_ns_attach(void *args)
 static int get_lsm_label_fd_safe(struct lsm_label_fd_data *l)
 {
 	int on_exec, pid, ret;
+	bool in_right_pidns, in_right_userns;
 
 	on_exec = l->options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
 	l->lsm_labelfd = lsm_open(l->attached_pid, on_exec);
 	if (l->lsm_labelfd >= 0)
 		goto out;
 
-	if ((l->options->namespaces & CLONE_NEWUSER) == 0)
+	/* We're already in the right user namespace. */
+	in_right_userns = ((l->options->namespaces & CLONE_NEWUSER) == 0 &&
+			   (l->init_ctx->ns_fd[LXC_NS_USER] < 0));
+
+	/* We're already in the right pid namespace. */
+	in_right_pidns = ((l->options->namespaces & CLONE_NEWPID) == 0 &&
+			  (l->init_ctx->ns_fd[LXC_NS_PID] < 0));
+
+	/* If we're in the right pid namespace and the right user namespace then
+	 * the failure to open the lsm label fd must be a genuine error not
+	 * caused by mounting /proc with hidepid={1,2}.
+	 */
+	if (in_right_pidns && in_right_userns)
 		return -1;
 
 	/* /proc could be mounted with hidepid={1,2} so try something more
