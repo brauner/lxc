@@ -1238,18 +1238,6 @@ int lxc_attach(const char *name, const char *lxcpath,
 			goto on_error;
 		}
 
-		/* Wait for the (grand)child to tell us that it's ready to set
-		 * up its LSM labels.
-		 */
-		expected = 3;
-		ret = lxc_read_nointr_expect(ipc_sockets[0], &status,
-					     sizeof(status), &expected);
-		if (ret <= 0) {
-			ERROR("Expected to receive sequence number 3: %s.",
-			      strerror(errno));
-			goto on_error;
-		}
-
 		/* Open LSM fd and send it to child. */
 		if ((options->namespaces & CLONE_NEWNS) &&
 		    (options->attach_flags & LXC_ATTACH_LSM) &&
@@ -1555,15 +1543,6 @@ static int attach_child_main(void* data)
 		}
 		INFO("PR_SET_NO_NEW_PRIVS is set. Process cannot use execve() "
 		     "gainable privileges.");
-	}
-
-	/* Tell the (grand)parent to send us LSM label fd. */
-	status = 3;
-	ret = lxc_write_nointr(ipc_socket, &status, sizeof(status));
-	if (ret <= 0) {
-		ERROR("Intended to send sequence number 3: %s.", strerror(errno));
-		shutdown(ipc_socket, SHUT_RDWR);
-		rexit(-1);
 	}
 
 	if ((options->namespaces & CLONE_NEWNS) &&
