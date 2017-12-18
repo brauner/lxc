@@ -877,6 +877,7 @@ static int do_ns_attach(void *args)
 			SYSERROR("Failed to attach to user namespace");
 			return -1;
 		}
+		TRACE("Attached to user namespace");
 	}
 
 	attach_pidns = (data->init_ctx->ns_fd[LXC_NS_PID] >= 0);
@@ -886,6 +887,7 @@ static int do_ns_attach(void *args)
 			SYSERROR("Failed to attach to pid namespace");
 			return -1;
 		}
+		TRACE("Attached to pid namespace");
 	}
 
 	ret = lxc_switch_uid_gid(0, 0);
@@ -962,7 +964,7 @@ static int get_lsm_label_fd_safe(struct lsm_label_fd_data *l)
 		return -1;
 
 out:
-	INFO("Retrieved LSM label file descriptor");
+	INFO("Retrieved LSM label file descriptor %d", l->lsm_labelfd);
 	return l->lsm_labelfd;
 }
 
@@ -1164,6 +1166,8 @@ int lxc_attach(const char *name, const char *lxcpath,
 		if (options->attach_flags & LXC_ATTACH_MOVE_TO_CGROUP) {
 			if (!cgroup_attach(name, lxcpath, pid))
 				goto on_error;
+			TRACE("Moved intermediate process %d into container's "
+			      "cgroups", pid);
 		}
 
 		/* Setup resource limits */
@@ -1176,16 +1180,19 @@ int lxc_attach(const char *name, const char *lxcpath,
 		ret = lxc_abstract_unix_send_credential(ipc_sockets[0], &status, sizeof(status));
 		if (ret != sizeof(status))
 			goto on_error;
+		TRACE("Sync sequence 0");
 
 		/* Get pid of attached process from intermediate process. */
 		ret = lxc_abstract_unix_rcv_credential(ipc_sockets[0], &attached_pid, sizeof(attached_pid));
 		if (ret != sizeof(attached_pid))
 			goto on_error;
+		TRACE("Received pid %d of attached process in parent pid namespace", attached_pid);
 
 		/* Get pid of attached process in its pid namespace from intermediate process. */
 		ret = lxc_abstract_unix_rcv_credential(ipc_sockets[0], &attached_pid_in_ns, sizeof(attached_pid_in_ns));
 		if (ret != sizeof(attached_pid_in_ns))
 			goto on_error;
+		TRACE("Received pid %d of attached process in child pid namespace", attached_pid_in_ns);
 
 		/* Ignore SIGKILL (CTRL-C) and SIGQUIT (CTRL-\) - issue #313. */
 		if (options->stdin_fd == 0) {
@@ -1197,6 +1204,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 		ret = wait_for_pid(pid);
 		if (ret < 0)
 			goto on_error;
+		TRACE("Intermediate process %d exited", pid);
 
 		/* We will always have to reap the attached process now. */
 		to_cleanup_pid = attached_pid;
@@ -1219,15 +1227,15 @@ int lxc_attach(const char *name, const char *lxcpath,
 				ERROR("Failed to retrieve LSM label file descriptor %d", labelfd);
 				goto on_error;
 			}
-			TRACE("Sending LSM label file descriptor %d", labelfd);
 
 			/* Send child fd of the LSM security module to write to. */
 			ret = lxc_abstract_unix_send_fds(ipc_sockets[0], &labelfd, 1, NULL, 0);
 			close(labelfd);
 			if (ret <= 0) {
-				ERROR("Failed to send LSM label file descriptor");
+				SYSERROR("%d", (int)ret);
 				goto on_error;
 			}
+			TRACE("Sent LSM label file descriptor %d to child", labelfd);
 		}
 
 		/* Now shut down communication with child, we're done. */
@@ -1268,6 +1276,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 		lxc_proc_put_context_info(init_ctx);
 		rexit(-1);
 	}
+	TRACE("Received sequence number 0");
 
 	/* Attach now, create another subprocess later, since pid namespaces
 	 * only really affect the children of the current process.
@@ -1313,7 +1322,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 
 	/* Shouldn't happen, clone() should always return positive pid. */
 	if (pid <= 0) {
-		SYSERROR("Failed to create subprocess.");
+		SYSERROR("Failed to create subprocess");
 		shutdown(ipc_sockets[1], SHUT_RDWR);
 		lxc_proc_put_context_info(init_ctx);
 		rexit(-1);
@@ -1328,11 +1337,11 @@ int lxc_attach(const char *name, const char *lxcpath,
 		 * CLONE_PARENT) so the parent won't be able to reap it and the
 		 * attached process will remain a zombie.
 		 */
-		ERROR("Intended to send pid %d: %s.", pid, strerror(errno));
 		shutdown(ipc_sockets[1], SHUT_RDWR);
 		lxc_proc_put_context_info(init_ctx);
 		rexit(-1);
 	}
+	TRACE("Sending pid %d of attached process in parent pid namespace", pid);
 
 	/* The rest is in the hands of the initial and the attached process. */
 	lxc_proc_put_context_info(init_ctx);
@@ -1341,7 +1350,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 
 static int attach_child_main(void* data)
 {
-	int fd, lsm_labelfd, ret, status;
+	int fd, ret, status;
 	long flags;
 #if HAVE_SYS_PERSONALITY_H
 	long new_personality;
@@ -1357,10 +1366,10 @@ static int attach_child_main(void* data)
 	status = syscall(SYS_getpid);
 	ret = lxc_abstract_unix_send_credential(ipc_socket, &status, sizeof(status));
 	if (ret != sizeof(status)) {
-		ERROR("Intended to send sequence number 1: %s.", strerror(errno));
 		shutdown(ipc_socket, SHUT_RDWR);
 		rexit(-1);
 	}
+	TRACE("Sending pid %d of attached process in child pid namespace", status);
 
 	/* A description of the purpose of this functionality is provided in the
 	 * lxc-attach(1) manual page. We have to remount here and not in the
@@ -1474,14 +1483,15 @@ static int attach_child_main(void* data)
 
 	if ((options->namespaces & CLONE_NEWNS) &&
 	    (options->attach_flags & LXC_ATTACH_LSM) && init_ctx->lsm_label) {
-		int on_exec;
+		int lsm_labelfd, on_exec;
+
 		/* Receive fd for LSM security module. */
 		ret = lxc_abstract_unix_recv_fds(ipc_socket, &lsm_labelfd, 1, NULL, 0);
 		if (ret <= 0) {
-			ERROR("Expected to receive file descriptor: %s.", strerror(errno));
 			shutdown(ipc_socket, SHUT_RDWR);
 			rexit(-1);
 		}
+		TRACE("Received LSM label file descriptor %d from parent", lsm_labelfd);
 
 		/* Change into our new LSM profile. */
 		on_exec = options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
