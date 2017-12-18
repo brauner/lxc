@@ -88,12 +88,13 @@ lxc_log_define(lxc_attach, lxc);
 
 /* /proc/pid-to-str/current\0 = (5 + 21 + 7 + 1) */
 #define __LSMATTRLEN (5 + (LXC_NUMSTRLEN64) + 7 + 1)
-static int lsm_openat(int procfd, pid_t pid, int on_exec)
+static int lsm_open(pid_t pid, int on_exec)
 {
-	int ret = -1;
-	int labelfd = -1;
+	int saved_errno;
 	const char *name;
 	char path[__LSMATTRLEN];
+	int ret = -1;
+	int labelfd = -1;
 
 	name = lsm_name();
 
@@ -108,18 +109,21 @@ static int lsm_openat(int procfd, pid_t pid, int on_exec)
 		on_exec = 0;
 
 	if (on_exec)
-		ret = snprintf(path, __LSMATTRLEN, "%d/attr/exec", pid);
+		ret = snprintf(path, __LSMATTRLEN, "/proc/%d/attr/exec", pid);
 	else
-		ret = snprintf(path, __LSMATTRLEN, "%d/attr/current", pid);
+		ret = snprintf(path, __LSMATTRLEN, "/proc/%d/attr/current", pid);
 	if (ret < 0 || ret >= __LSMATTRLEN)
 		return -1;
 
-	labelfd = openat(procfd, path, O_RDWR);
+	saved_errno = errno;
+	labelfd = open(path, O_RDWR);
 	if (labelfd < 0) {
-		SYSERROR("Unable to open file descriptor to set LSM label.");
+		WARN("%s - Unable to open file descriptor to set LSM label", strerror(saved_errno));
+		errno = saved_errno;
 		return -1;
 	}
 
+	errno = saved_errno;
 	return labelfd;
 }
 
@@ -719,7 +723,7 @@ struct attach_clone_payload {
 	void *exec_payload;
 };
 
-static int attach_child_main(void* data);
+static int attach_child_main(void *data);
 
 /* Help the optimizer along if it doesn't know that exit always exits. */
 #define rexit(c)                                                               \
@@ -816,6 +820,117 @@ static signed long get_personality(const char *name, const char *lxcpath)
 	free(p);
 
 	return ret;
+}
+
+struct lsm_label_fd_data {
+	pid_t attached_pid;
+	pid_t attached_pid_in_ns;
+	int lsm_labelfd;
+	lxc_attach_options_t *options;
+	struct lxc_proc_context_info *init_ctx;
+};
+
+static int do_lsm_label_fd_get(void *args)
+{
+	int on_exec, ret;
+	struct lsm_label_fd_data *data = args;
+
+	ret = mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+	if (ret < 0)
+		WARN("Failed to make / MS_PRIVATE. Continuing...");
+
+	(void)umount2("/proc", MNT_DETACH);
+
+	ret = mount("none", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
+	if (ret < 0) {
+		SYSERROR("Failed to mount \"/proc\" in transient mount namespace");
+		return -1;
+	}
+
+	on_exec = data->options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
+	ret = lsm_open(data->attached_pid_in_ns, on_exec);
+	if (ret < 0) {
+		SYSERROR("Failed to open LSM file descriptor");
+		return -1;
+	}
+	data->lsm_labelfd = ret;
+
+	return 0;
+}
+
+static int do_ns_attach(void *args)
+{
+	int pid, ret;
+	struct lsm_label_fd_data *data = args;
+
+	ret = prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+	if (ret < 0) {
+		SYSERROR("Failed to ensure that helpers are undumpable");
+		return -1;
+	}
+
+	ret = setns(data->init_ctx->ns_fd[LXC_NS_USER], CLONE_NEWUSER);
+	if (ret < 0) {
+		SYSERROR("Failed to attach to user namespace");
+		return -1;
+	}
+
+	ret = setns(data->init_ctx->ns_fd[LXC_NS_PID], CLONE_NEWPID);
+	if (ret < 0) {
+		SYSERROR("Failed to attach to pid namespace");
+		return -1;
+	}
+
+	ret = lxc_switch_uid_gid(0, 0);
+	if (ret < 0)
+		return -1;
+
+	ret = lxc_setgroups(0, NULL);
+	if (ret < 0)
+		return -1;
+
+	pid = lxc_clone(do_lsm_label_fd_get, data,
+			CLONE_VM | CLONE_FILES | CLONE_NEWNS);
+	if (pid < 0) {
+		SYSERROR("Failed to create new process");
+		return -1;
+	}
+
+	ret = wait_for_pid(pid);
+	if (ret < 0)
+		return -1;
+
+	return 0;
+}
+
+static int get_lsm_label_fd_safe(struct lsm_label_fd_data *l)
+{
+	int on_exec, pid, ret;
+
+	on_exec = l->options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
+	l->lsm_labelfd = lsm_open(l->attached_pid, on_exec);
+	if (l->lsm_labelfd >= 0)
+		goto out;
+
+	if ((l->options->namespaces & CLONE_NEWUSER) == 0)
+		return -1;
+
+	/* /proc could be mounted with hidepid={1,2} so try something more
+	 * difficult.
+	 */
+	pid = lxc_clone(do_ns_attach, l, CLONE_VM | CLONE_FILES);
+	if (pid < 0) {
+		SYSERROR("Failed to create new process");
+		return -1;
+	}
+
+	ret = wait_for_pid(pid);
+	if (ret < 0)
+		return -1;
+
+out:
+	INFO("Retrieved LSM label file descriptor");
+	return l->lsm_labelfd;
 }
 
 int lxc_attach(const char *name, const char *lxcpath,
@@ -1003,11 +1118,8 @@ int lxc_attach(const char *name, const char *lxcpath,
 	}
 
 	if (pid) {
-		int procfd = -1;
+		pid_t attached_pid_in_ns;
 		pid_t to_cleanup_pid = pid;
-
-		/* close file namespace descriptors */
-		lxc_proc_close_ns_fd(init_ctx);
 
 		/* Initial thread, we close the socket that is for the
 		 * subprocesses.
@@ -1026,15 +1138,6 @@ int lxc_attach(const char *name, const char *lxcpath,
 			if (setup_resource_limits(&init_ctx->container->lxc_conf->limits, pid) < 0)
 				goto on_error;
 
-		/* Open /proc before setns() to the containers namespace so we
-		 * don't rely on any information from inside the container.
-		 */
-		procfd = open("/proc", O_DIRECTORY | O_RDONLY | O_CLOEXEC);
-		if (procfd < 0) {
-			SYSERROR("Unable to open /proc.");
-			goto on_error;
-		}
-
 		/* Let the child process know to go ahead. */
 		status = 0;
 		ret = lxc_write_nointr(ipc_sockets[0], &status, sizeof(status));
@@ -1047,6 +1150,15 @@ int lxc_attach(const char *name, const char *lxcpath,
 		/* Get pid of attached process from intermediate process. */
 		ret = lxc_read_nointr_expect(ipc_sockets[0], &attached_pid,
 					     sizeof(attached_pid), NULL);
+		if (ret <= 0) {
+			if (ret != 0)
+				ERROR("Expected to receive pid: %s.", strerror(errno));
+			goto on_error;
+		}
+
+		/* Get pid of attached process in its pid namespace from intermediate process. */
+		ret = lxc_read_nointr_expect(ipc_sockets[0], &attached_pid_in_ns,
+					     sizeof(attached_pid_in_ns), NULL);
 		if (ret <= 0) {
 			if (ret != 0)
 				ERROR("Expected to receive pid: %s.", strerror(errno));
@@ -1109,27 +1221,31 @@ int lxc_attach(const char *name, const char *lxcpath,
 		if ((options->namespaces & CLONE_NEWNS) &&
 		    (options->attach_flags & LXC_ATTACH_LSM) &&
 		    init_ctx->lsm_label) {
-			int on_exec, saved_errno;
-			int labelfd = -1;
+			int labelfd;
+			int ret = -1;
+			struct lsm_label_fd_data l;
 
-			on_exec = options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
-			/* Open fd for the LSM security module. */
-			labelfd = lsm_openat(procfd, attached_pid, on_exec);
-			if (labelfd < 0)
+			l.attached_pid = attached_pid;
+			l.attached_pid_in_ns = attached_pid_in_ns;
+			l.options = options;
+			l.init_ctx = init_ctx;
+
+			labelfd = get_lsm_label_fd_safe(&l);
+			if (labelfd < 0) {
+				ERROR("Failed to retrieve LSM label file descriptor %d", labelfd);
 				goto on_error;
+			}
+			TRACE("Sending LSM label file descriptor %d", labelfd);
 
 			/* Send child fd of the LSM security module to write to. */
 			ret = lxc_abstract_unix_send_fds(ipc_sockets[0], &labelfd, 1, NULL, 0);
-			saved_errno = errno;
 			close(labelfd);
 			if (ret <= 0) {
-				ERROR("Intended to send file descriptor %d: %s.", labelfd, strerror(saved_errno));
+				ERROR("Failed to send LSM label file descriptor");
 				goto on_error;
 			}
 		}
 
-		if (procfd >= 0)
-			close(procfd);
 		/* Now shut down communication with child, we're done. */
 		shutdown(ipc_sockets[0], SHUT_RDWR);
 		close(ipc_sockets[0]);
@@ -1147,8 +1263,6 @@ int lxc_attach(const char *name, const char *lxcpath,
 		/* First shut down the socket, then wait for the pid, otherwise
 		 * the pid we're waiting for may never exit.
 		 */
-		if (procfd >= 0)
-			close(procfd);
 		shutdown(ipc_sockets[0], SHUT_RDWR);
 		close(ipc_sockets[0]);
 		if (to_cleanup_pid)
@@ -1257,6 +1371,15 @@ static int attach_child_main(void* data)
 	int ipc_socket = payload->ipc_socket;
 	lxc_attach_options_t* options = payload->options;
 	struct lxc_proc_context_info* init_ctx = payload->init_ctx;
+
+	/* Tell parent the pid in our pid namespace. */
+	status = syscall(SYS_getpid);
+	ret = lxc_write_nointr(ipc_socket, &status, sizeof(status));
+	if (ret != sizeof(status)) {
+		ERROR("Intended to send sequence number 1: %s.", strerror(errno));
+		shutdown(ipc_socket, SHUT_RDWR);
+		rexit(-1);
+	}
 
 	/* Wait for the initial thread to signal us that it's ready for us to
 	 * start initializing.
