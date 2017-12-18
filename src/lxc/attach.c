@@ -1212,24 +1212,6 @@ int lxc_attach(const char *name, const char *lxcpath,
 		/* We will always have to reap the attached process now. */
 		to_cleanup_pid = attached_pid;
 
-		/* Wait for the attached process to finish initializing. */
-		expected = 1;
-		ret = lxc_read_nointr_expect(ipc_sockets[0], &status,
-					     sizeof(status), &expected);
-		if (ret <= 0) {
-			if (ret != 0)
-				ERROR("Expected to receive sequence number 1: %s.", strerror(errno));
-			goto on_error;
-		}
-
-		/* Tell attached process we're done. */
-		status = 2;
-		ret = lxc_write_nointr(ipc_sockets[0], &status, sizeof(status));
-		if (ret <= 0) {
-			ERROR("Intended to send sequence number 2: %s.", strerror(errno));
-			goto on_error;
-		}
-
 		/* Open LSM fd and send it to child. */
 		if ((options->namespaces & CLONE_NEWNS) &&
 		    (options->attach_flags & LXC_ATTACH_LSM) &&
@@ -1373,7 +1355,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 
 static int attach_child_main(void* data)
 {
-	int expected, fd, lsm_labelfd, ret, status;
+	int fd, lsm_labelfd, ret, status;
 	long flags;
 #if HAVE_SYS_PERSONALITY_H
 	long new_personality;
@@ -1486,27 +1468,6 @@ static int attach_child_main(void* data)
 	if ((new_uid != 0 || options->namespaces & CLONE_NEWUSER) &&
 	    setuid(new_uid)) {
 		SYSERROR("Switching to container uid.");
-		shutdown(ipc_socket, SHUT_RDWR);
-		rexit(-1);
-	}
-
-	/* Tell initial process it may now put us into cgroups. */
-	status = 1;
-	ret = lxc_write_nointr(ipc_socket, &status, sizeof(status));
-	if (ret != sizeof(status)) {
-		ERROR("Intended to send sequence number 1: %s.", strerror(errno));
-		shutdown(ipc_socket, SHUT_RDWR);
-		rexit(-1);
-	}
-
-	/* Wait for the initial thread to signal us that it has done everything
-	 * for us when it comes to cgroups etc.
-	 */
-	expected = 2;
-	status = -1;
-	ret = lxc_read_nointr_expect(ipc_socket, &status, sizeof(status), &expected);
-	if (ret <= 0) {
-		ERROR("Expected to receive sequence number 2: %s", strerror(errno));
 		shutdown(ipc_socket, SHUT_RDWR);
 		rexit(-1);
 	}
