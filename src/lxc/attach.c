@@ -32,6 +32,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/unistd.h>
+#include <sys/fsuid.h>
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/prctl.h>
@@ -118,7 +119,8 @@ static int lsm_open(pid_t pid, int on_exec)
 	saved_errno = errno;
 	labelfd = open(path, O_RDWR);
 	if (labelfd < 0) {
-		WARN("%s - Unable to open file descriptor to set LSM label", strerror(saved_errno));
+		WARN("%s - Unable to open LSM label file descriptor for "
+		     "process %d", strerror(saved_errno), pid);
 		errno = saved_errno;
 		return -1;
 	}
@@ -930,10 +932,13 @@ static int get_lsm_label_fd_safe(struct lsm_label_fd_data *l)
 	int on_exec, pid, ret;
 	bool in_right_pidns, in_right_userns;
 
+	sleep(1000000);
 	on_exec = l->options->attach_flags & LXC_ATTACH_LSM_EXEC ? 1 : 0;
 	l->lsm_labelfd = lsm_open(l->attached_pid, on_exec);
-	if (l->lsm_labelfd >= 0)
+	if (l->lsm_labelfd >= 0) {
+		SYSERROR("AAAAA");
 		goto out;
+	}
 
 	/* We're already in the right user namespace. */
 	in_right_userns = ((l->options->namespaces & CLONE_NEWUSER) == 0 &&
@@ -1228,6 +1233,12 @@ int lxc_attach(const char *name, const char *lxcpath,
 				goto on_error;
 			}
 
+			/* block until we are told to proceed */
+			ret = lxc_abstract_unix_send_credential(ipc_sockets[0], &status, sizeof(status));
+			if (ret != sizeof(status))
+				goto on_error;
+			TRACE("Sent sync sequence 1");
+
 			/* Send child fd of the LSM security module to write to. */
 			ret = lxc_abstract_unix_send_fds(ipc_sockets[0], &labelfd, 1, NULL, 0);
 			close(labelfd);
@@ -1385,6 +1396,9 @@ static int attach_child_main(void* data)
 		}
 	}
 
+
+	fprintf(stderr, "in child, prior to setuid: %d : %d\n", setfsuid(-1), setfsgid(-1));
+
 	/* Now perform additional attachments. */
 #if HAVE_SYS_PERSONALITY_H
 	if (options->personality < 0)
@@ -1422,6 +1436,14 @@ static int attach_child_main(void* data)
 		shutdown(ipc_socket, SHUT_RDWR);
 		rexit(-1);
 	}
+
+	/* block until we are told to proceed */
+	ret = lxc_abstract_unix_rcv_credential(ipc_socket, &status, sizeof(status));
+	if (ret != sizeof(status)) {
+		shutdown(ipc_socket, SHUT_RDWR);
+		rexit(-1);
+	}
+	TRACE("Received sync sequence 1");
 
 	/* Set {u,g}id. */
 	new_uid = 0;
@@ -1466,6 +1488,8 @@ static int attach_child_main(void* data)
 		shutdown(ipc_socket, SHUT_RDWR);
 		rexit(-1);
 	}
+
+	fprintf(stderr, "in child, post setuid: %d : %d\n", setfsuid(-1), setfsgid(-1));
 
 	if ((init_ctx->container && init_ctx->container->lxc_conf &&
 	     init_ctx->container->lxc_conf->no_new_privs) ||
