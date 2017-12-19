@@ -1173,30 +1173,19 @@ int lxc_attach(const char *name, const char *lxcpath,
 
 		/* Let the child process know to go ahead. */
 		status = 0;
-		ret = lxc_write_nointr(ipc_sockets[0], &status, sizeof(status));
-		if (ret <= 0) {
-			ERROR("Intended to send sequence number 0: %s.",
-			      strerror(errno));
+		ret = lxc_abstract_unix_send_credential(ipc_sockets[0], &status, sizeof(status));
+		if (ret != sizeof(status))
 			goto on_error;
-		}
 
 		/* Get pid of attached process from intermediate process. */
-		ret = lxc_read_nointr_expect(ipc_sockets[0], &attached_pid,
-					     sizeof(attached_pid), NULL);
-		if (ret <= 0) {
-			if (ret != 0)
-				ERROR("Expected to receive pid: %s.", strerror(errno));
+		ret = lxc_abstract_unix_rcv_credential(ipc_sockets[0], &attached_pid, sizeof(attached_pid));
+		if (ret != sizeof(attached_pid))
 			goto on_error;
-		}
 
 		/* Get pid of attached process in its pid namespace from intermediate process. */
-		ret = lxc_read_nointr_expect(ipc_sockets[0], &attached_pid_in_ns,
-					     sizeof(attached_pid_in_ns), NULL);
-		if (ret <= 0) {
-			if (ret != 0)
-				ERROR("Expected to receive pid: %s.", strerror(errno));
+		ret = lxc_abstract_unix_rcv_credential(ipc_sockets[0], &attached_pid_in_ns, sizeof(attached_pid_in_ns));
+		if (ret != sizeof(attached_pid_in_ns))
 			goto on_error;
-		}
 
 		/* Ignore SIGKILL (CTRL-C) and SIGQUIT (CTRL-\) - issue #313. */
 		if (options->stdin_fd == 0) {
@@ -1273,11 +1262,8 @@ int lxc_attach(const char *name, const char *lxcpath,
 
 	/* Wait for the parent to have setup cgroups. */
 	expected = 0;
-	status = -1;
-	ret = lxc_read_nointr_expect(ipc_sockets[1], &status, sizeof(status),
-				     &expected);
-	if (ret <= 0) {
-		ERROR("Expected to receive sequence number 0: %s.", strerror(errno));
+	ret = lxc_abstract_unix_rcv_credential(ipc_sockets[1], &status, sizeof(status));
+	if (ret != sizeof(status) || status != expected) {
 		shutdown(ipc_sockets[1], SHUT_RDWR);
 		lxc_proc_put_context_info(init_ctx);
 		rexit(-1);
@@ -1334,7 +1320,7 @@ int lxc_attach(const char *name, const char *lxcpath,
 	}
 
 	/* Tell grandparent the pid of the pid of the newly created child. */
-	ret = lxc_write_nointr(ipc_sockets[1], &pid, sizeof(pid));
+	ret = lxc_abstract_unix_send_credential(ipc_sockets[1], &pid, sizeof(pid));
 	if (ret != sizeof(pid)) {
 		/* If this really happens here, this is very unfortunate, since
 		 * the parent will not know the pid of the attached process and
@@ -1369,7 +1355,7 @@ static int attach_child_main(void* data)
 
 	/* Tell parent the pid in our pid namespace. */
 	status = syscall(SYS_getpid);
-	ret = lxc_write_nointr(ipc_socket, &status, sizeof(status));
+	ret = lxc_abstract_unix_send_credential(ipc_socket, &status, sizeof(status));
 	if (ret != sizeof(status)) {
 		ERROR("Intended to send sequence number 1: %s.", strerror(errno));
 		shutdown(ipc_socket, SHUT_RDWR);

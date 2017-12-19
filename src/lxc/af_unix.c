@@ -22,14 +22,15 @@
  */
 #include "config.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stddef.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 
 #include "log.h"
@@ -216,7 +217,7 @@ int lxc_abstract_unix_send_credential(int fd, void *data, size_t size)
 	struct iovec iov;
 	struct cmsghdr *cmsg;
 	struct ucred cred = {
-	    .pid = getpid(), .uid = getuid(), .gid = getgid(),
+	    .pid = syscall(SYS_getpid), .uid = getuid(), .gid = getgid(),
 	};
 	char cmsgbuf[CMSG_SPACE(sizeof(cred))] = {0};
 	char buf[1] = {0};
