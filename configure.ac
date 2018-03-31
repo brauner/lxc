@@ -266,6 +266,16 @@ AM_COND_IF([ENABLE_GNUTLS],
 	AC_CHECK_LIB([gnutls], [gnutls_hash_fast],[],[AC_MSG_ERROR([You must install the GnuTLS development package in order to compile lxc])])
 	AC_SUBST([GNUTLS_LIBS], [-lgnutls])])
 
+# OCI support
+AC_ARG_ENABLE([oci],
+	[AC_HELP_STRING([--enable-oci], [enable oci support [default=yes]])],
+	[], [enable_oci=yes])
+AM_CONDITIONAL([ENABLE_OCI], [test "x$enable_oci" = "xyes"])
+
+AM_COND_IF([ENABLE_OCI],
+	[AC_CHECK_HEADER([jansson.h],[],[AC_MSG_ERROR([You must install the jansson json parser in order to compile lxc])])
+	AC_SUBST([JANSSON_LIBS], [-ljansson])])
+
 # SELinux
 AC_ARG_ENABLE([selinux],
 	[AC_HELP_STRING([--enable-selinux], [enable SELinux support [default=auto]])],
@@ -859,6 +869,7 @@ Environment:
  - init script type(s): $init_script
  - rpath: $enable_rpath
  - GnuTLS: $enable_gnutls
+ - OCI: $enable_oci
  - Bash integration: $enable_bash
 
 Security features:

@@ -112,4 +112,13 @@ bool clone_update_unexp_ovl_paths(struct lxc_conf *conf, const char *oldpath,
 
 extern bool network_new_hwaddrs(struct lxc_conf *conf);
 
+#define lxc_config_define_extern(name)                                         \
+	extern int set_config_##name(const char *, const char *,               \
+				     struct lxc_conf *, void *);               \
+	extern int get_config_##name(const char *, char *, int,                \
+				     struct lxc_conf *, void *);               \
+	extern int clr_config_##name(const char *, struct lxc_conf *, void *);
+
+lxc_config_define_extern(uts_name);
+
 #endif /* __LXC_CONFILE_H */

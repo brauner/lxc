@@ -24,6 +24,7 @@ noinst_HEADERS = \
 	caps.h \
 	conf.h \
 	confile.h \
+	confile_oci.h \
 	confile_utils.h \
 	error.h \
 	initutils.h \
@@ -109,6 +110,7 @@ liblxc_la_SOURCES = \
 	namespace.h namespace.c \
 	conf.c conf.h \
 	confile.c confile.h \
+	confile_oci.c confile_oci.h \
 	confile_utils.c confile_utils.h \
 	list.h \
 	state.c state.h \
@@ -196,7 +198,7 @@ liblxc_la_LDFLAGS = \
 	-Wl,-soname,liblxc.so.$(firstword $(subst ., ,@LXC_ABI@)) \
 	-version-info @LXC_ABI_MAJOR@
 
-liblxc_la_LIBADD = $(CAP_LIBS) $(SELINUX_LIBS) $(SECCOMP_LIBS)
+liblxc_la_LIBADD = $(CAP_LIBS) $(SELINUX_LIBS) $(SECCOMP_LIBS) $(JANSSON_LIBS)
 
 bin_SCRIPTS=
 

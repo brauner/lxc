@@ -141,7 +141,6 @@ lxc_config_define(signal_stop);
 lxc_config_define(start);
 lxc_config_define(tty_max);
 lxc_config_define(tty_dir);
-lxc_config_define(uts_name);
 lxc_config_define(sysctl);
 lxc_config_define(proc);
 
@@ -2147,8 +2146,8 @@ static int set_config_rootfs_options(const char *key, const char *value,
 	return set_config_string_item(&lxc_conf->rootfs.options, value);
 }
 
-static int set_config_uts_name(const char *key, const char *value,
-			      struct lxc_conf *lxc_conf, void *data)
+int set_config_uts_name(const char *key, const char *value,
+		        struct lxc_conf *lxc_conf, void *data)
 {
 	struct utsname *utsname;
 
@@ -3205,8 +3204,8 @@ static int get_config_rootfs_options(const char *key, char *retv, int inlen,
 	return lxc_get_conf_str(retv, inlen, c->rootfs.options);
 }
 
-static int get_config_uts_name(const char *key, char *retv, int inlen,
-			      struct lxc_conf *c, void *data)
+int get_config_uts_name(const char *key, char *retv, int inlen,
+			struct lxc_conf *c, void *data)
 {
 	return lxc_get_conf_str(
 	    retv, inlen,
@@ -3807,8 +3806,7 @@ static inline int clr_config_rootfs_options(const char *key, struct lxc_conf *c,
 	return 0;
 }
 
-static inline int clr_config_uts_name(const char *key, struct lxc_conf *c,
-				     void *data)
+int clr_config_uts_name(const char *key, struct lxc_conf *c, void *data)
 {
 	free(c->utsname);
 	c->utsname = NULL;
