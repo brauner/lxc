@@ -219,6 +219,66 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_linux_cgroups_path(json_t *elem, struct lxc_conf *conf)
+{
+	WARN("The \"cgroupsPath\" property is not implemented");
+	return 0;
+}
+
+static int lxc_oci_linux_devices(json_t *elem, struct lxc_conf *conf)
+{
+	WARN("The \"devices\" property is not implemented");
+	return 0;
+}
+
+static int lxc_oci_linux_gidmap(json_t *elem, struct lxc_conf *conf)
+{
+	WARN("The \"gidMappings\" property is not implemented");
+	return 0;
+}
+
+static int lxc_oci_linux_uidmap(json_t *elem, struct lxc_conf *conf)
+{
+	WARN("The \"uidMappings\" property is not implemented");
+	return 0;
+}
+
+static int lxc_oci_linux_sysctl(json_t *elem, struct lxc_conf *conf)
+{
+	WARN("The \"sysctl\" property is not implemented");
+	return 0;
+}
+
+static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
+{
+	const char *key;
+	json_t *val;
+
+	if (json_typeof(elem) != JSON_OBJECT)
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		int ret = 0;
+
+		if (strcmp(key, "cgroupsPath") == 0)
+			ret = lxc_oci_linux_cgroups_path(val, conf);
+		else if (strcmp(key, "devices") == 0)
+			ret = lxc_oci_linux_devices(val, conf);
+		else if (strcmp(key, "gidMappings") == 0)
+			ret = lxc_oci_linux_gidmap(val, conf);
+		else if (strcmp(key, "sysctl") == 0)
+			ret = lxc_oci_linux_sysctl(val, conf);
+		else if (strcmp(key, "uidMappings") == 0)
+			ret = lxc_oci_linux_uidmap(val, conf);
+		else
+			INFO("Ignoring \"%s\" property", key);
+		if (ret < 0)
+			return -1;
+	}
+
+	return 0;
+}
+
 int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 {
 	size_t length;
@@ -263,18 +323,24 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
+			ret = lxc_oci_linux(value, conf);
+			if (ret < 0)
+				goto on_error;
 		} else if (strcmp(key, "mounts") == 0) {
 			if (json_typeof(value) != JSON_ARRAY)
 				return -EINVAL;
 
+			WARN("The \"mounts\" property is not implemented");
 		} else if (strcmp(key, "process") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
+			WARN("The \"process\" property is not implemented");
 		} else if (strcmp(key, "root") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
+			WARN("The \"root\" property is not implemented");
 		} else if (strcmp(key, "ociVersion") == 0) {
 			if (json_typeof(value) != JSON_STRING)
 				return -EINVAL;
@@ -288,6 +354,7 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
+			WARN("The \"platform\" property is not implemented");
 		} else {
 			INFO("Ignoring \"%s\"", key);
 		}
