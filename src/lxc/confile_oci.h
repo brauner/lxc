@@ -23,6 +23,6 @@
 
 struct lxc_conf;
 
-extern int oci_config_read(const char *file, struct lxc_conf *conf);
+extern int lxc_oci_config_read(const char *file, struct lxc_conf *conf);
 
 #endif /* __LXC_CONFILE_OCI_H */

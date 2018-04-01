@@ -219,7 +219,7 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
-int oci_config_read(const char *file, struct lxc_conf *conf)
+int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 {
 	size_t length;
 	char *buf;
@@ -245,7 +245,7 @@ int oci_config_read(const char *file, struct lxc_conf *conf)
 		int ret;
 
 		if (strcmp(key, "annotations") == 0) {
-			/* noop */
+			WARN("The \"annotations\" property is not implemented");
 		} else if (strcmp(key, "hostname") == 0) {
 			if (json_typeof(value) != JSON_STRING)
 				return -EINVAL;
@@ -279,6 +279,11 @@ int oci_config_read(const char *file, struct lxc_conf *conf)
 			if (json_typeof(value) != JSON_STRING)
 				return -EINVAL;
 
+			/* For now, just check that the version string is not
+			 * empty.
+			 */
+			if (!json_string_value(value))
+				return -EINVAL;
 		} else if (strcmp(key, "platform") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
