@@ -119,6 +119,10 @@ extern bool network_new_hwaddrs(struct lxc_conf *conf);
 				     struct lxc_conf *, void *);               \
 	extern int clr_config_##name(const char *, struct lxc_conf *, void *);
 
+lxc_config_define_extern(apparmor_profile);
+lxc_config_define_extern(init_cwd);
+lxc_config_define_extern(no_new_privs);
+lxc_config_define_extern(selinux_context);
 lxc_config_define_extern(uts_name);
 
 #endif /* __LXC_CONFILE_H */
