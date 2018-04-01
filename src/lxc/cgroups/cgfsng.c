@@ -927,7 +927,7 @@ static char *cg_hybrid_get_current_cgroup(char *basecginfo, char *controller,
 	}
 }
 
-static void must_append_string(char ***list, char *entry)
+static void must_append_string_to_list(char ***list, char *entry)
 {
 	int newentry;
 	char *copy;
@@ -966,16 +966,16 @@ static int get_existing_subsystems(char ***klist, char ***nlist)
 		 * In this case we use "cgroup2" as controller name.
 		 */
 		if ((p2 - p) == 0) {
-			must_append_string(klist, "cgroup2");
+			must_append_string_to_list(klist, "cgroup2");
 			continue;
 		}
 
 		for (tok = strtok_r(p, ",", &saveptr); tok;
 		     tok = strtok_r(NULL, ",", &saveptr)) {
 			if (strncmp(tok, "name=", 5) == 0)
-				must_append_string(nlist, tok);
+				must_append_string_to_list(nlist, tok);
 			else
-				must_append_string(klist, tok);
+				must_append_string_to_list(klist, tok);
 		}
 	}
 
