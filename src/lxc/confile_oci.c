@@ -279,6 +279,91 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
+{
+	const char *key;
+	json_t *val;
+
+	if (json_typeof(elem) != JSON_OBJECT)
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		int ret = 0;
+
+		if (strcmp(key, "args") == 0) {
+		} else if (strcmp(key, "apparmorProfile") == 0) {
+			if (json_is_string(val) == 0)
+				return -1;
+
+			ret = set_config_apparmor_profile("lxc.apparmor.profile",
+							  json_string_value(val),
+							  conf, NULL);
+		} else if (strcmp(key, "capabilities") == 0) {
+			if (json_is_object(val) == 0)
+				return -1;
+
+			WARN("The \"capabilities\" property is not implemented");
+		} else if (strcmp(key, "cwd") == 0) {
+			if (json_is_string(val) == 0)
+				return -1;
+
+			ret = set_config_init_cwd("lxc.init.cwd",
+						  json_string_value(val), conf,
+						  NULL);
+		} else if (strcmp(key, "consoleSize") == 0) {
+			if (json_is_object(val) == 0)
+				return -1;
+
+			WARN("The \"consoleSize\" property is not implemented");
+		} else if (strcmp(key, "env") == 0) {
+			WARN("The \"env\" property is not implemented");
+		} else if (strcmp(key, "noNewPrivileges") == 0) {
+			char *s = "0";
+
+			if (json_is_boolean(val) == 0)
+				return -1;
+
+			if (json_boolean_value(val) == 1)
+				s = "1";
+			ret = set_config_no_new_privs("lxc.no_new_privs", s,
+						      conf, NULL);
+		} else if (strcmp(key, "oomScoreAdj") == 0) {
+			if (json_is_integer(val) == 0)
+				return -1;
+
+			WARN("The \"oomScoreAdj\" property is not implemented");
+		} else if (strcmp(key, "rlimits") == 0) {
+			if (json_is_array(val) == 0)
+				return -1;
+
+			WARN("The \"rlimits\" property is not implemented");
+		} else if (strcmp(key, "selinuxLabel") == 0) {
+			if (json_is_string(val) == 0)
+				return -1;
+
+			ret = set_config_selinux_context("lxc.selinux.context",
+							 json_string_value(val),
+							 conf, NULL);
+		} else if (strcmp(key, "terminal") == 0) {
+			if (json_is_boolean(val) == 0)
+				return -1;
+
+			/* TODO: Seems like this is used to indicate daemonized
+			 * mode. If this is the case then we need to find a
+			 * simple way of setting c->daemonize in struct
+			 * lxc_container.  No big deal just a todo.
+			 */
+			WARN("The \"terminal\" property is not implemented");
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+		if (ret < 0)
+			return -1;
+	}
+
+	return 0;
+}
+
 int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 {
 	size_t length;
@@ -335,7 +420,9 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
-			WARN("The \"process\" property is not implemented");
+			ret = lxc_oci_process(value, conf);
+			if (ret < 0)
+				goto on_error;
 		} else if (strcmp(key, "root") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;

@@ -76,7 +76,6 @@ lxc_log_define(lxc_confile, lxc);
 
 lxc_config_define(autodev);
 lxc_config_define(apparmor_allow_incomplete);
-lxc_config_define(apparmor_profile);
 lxc_config_define(cap_drop);
 lxc_config_define(cap_keep);
 lxc_config_define(cgroup_controller);
@@ -96,7 +95,6 @@ lxc_config_define(hooks_version);
 lxc_config_define(idmaps);
 lxc_config_define(includefiles);
 lxc_config_define(init_cmd);
-lxc_config_define(init_cwd);
 lxc_config_define(init_gid);
 lxc_config_define(init_uid);
 lxc_config_define(log_file);
@@ -126,7 +124,6 @@ lxc_config_define(net_script_up);
 lxc_config_define(net_type);
 lxc_config_define(net_veth_pair);
 lxc_config_define(net_vlan_id);
-lxc_config_define(no_new_privs);
 lxc_config_define(personality);
 lxc_config_define(prlimit);
 lxc_config_define(pty_max);
@@ -134,7 +131,6 @@ lxc_config_define(rootfs_mount);
 lxc_config_define(rootfs_options);
 lxc_config_define(rootfs_path);
 lxc_config_define(seccomp_profile);
-lxc_config_define(selinux_context);
 lxc_config_define(signal_halt);
 lxc_config_define(signal_reboot);
 lxc_config_define(signal_stop);
@@ -835,8 +831,8 @@ static int set_config_init_cmd(const char *key, const char *value,
 	return set_config_path_item(&lxc_conf->init_cmd, value);
 }
 
-static int set_config_init_cwd(const char *key, const char *value,
-			       struct lxc_conf *lxc_conf, void *data)
+int set_config_init_cwd(const char *key, const char *value,
+			struct lxc_conf *lxc_conf, void *data)
 {
 	return set_config_path_item(&lxc_conf->init_cwd, value);
 }
@@ -1112,8 +1108,8 @@ static int set_config_tty_dir(const char *key, const char *value,
 					  NAME_MAX + 1);
 }
 
-static int set_config_apparmor_profile(const char *key, const char *value,
-				       struct lxc_conf *lxc_conf, void *data)
+int set_config_apparmor_profile(const char *key, const char *value,
+				struct lxc_conf *lxc_conf, void *data)
 {
 	return set_config_string_item(&lxc_conf->lsm_aa_profile, value);
 }
@@ -1137,8 +1133,8 @@ static int set_config_apparmor_allow_incomplete(const char *key,
 	return 0;
 }
 
-static int set_config_selinux_context(const char *key, const char *value,
-				      struct lxc_conf *lxc_conf, void *data)
+int set_config_selinux_context(const char *key, const char *value,
+			       struct lxc_conf *lxc_conf, void *data)
 {
 	return set_config_string_item(&lxc_conf->lsm_se_context, value);
 }
@@ -2830,8 +2826,8 @@ static int set_config_log_syslog(const char *key, const char *value,
 	return set_config_string_item(&lxc_conf->syslog, value);
 }
 
-static int set_config_no_new_privs(const char *key, const char *value,
-				   struct lxc_conf *lxc_conf, void *data)
+int set_config_no_new_privs(const char *key, const char *value,
+			    struct lxc_conf *lxc_conf, void *data)
 {
 	unsigned int v;
 
@@ -2898,8 +2894,8 @@ static int get_config_tty_dir(const char *key, char *retv, int inlen,
 	return lxc_get_conf_str(retv, inlen, c->ttydir);
 }
 
-static int get_config_apparmor_profile(const char *key, char *retv, int inlen,
-				       struct lxc_conf *c, void *data)
+int get_config_apparmor_profile(const char *key, char *retv, int inlen,
+				struct lxc_conf *c, void *data)
 {
 	return lxc_get_conf_str(retv, inlen, c->lsm_aa_profile);
 }
@@ -2912,8 +2908,8 @@ static int get_config_apparmor_allow_incomplete(const char *key, char *retv,
 				c->lsm_aa_allow_incomplete);
 }
 
-static int get_config_selinux_context(const char *key, char *retv, int inlen,
-				      struct lxc_conf *c, void *data)
+int get_config_selinux_context(const char *key, char *retv, int inlen,
+			       struct lxc_conf *c, void *data)
 {
 	return lxc_get_conf_str(retv, inlen, c->lsm_se_context);
 }
@@ -3431,8 +3427,8 @@ static int get_config_init_cmd(const char *key, char *retv, int inlen,
 	return lxc_get_conf_str(retv, inlen, c->init_cmd);
 }
 
-static int get_config_init_cwd(const char *key, char *retv, int inlen,
-			       struct lxc_conf *c, void *data)
+int get_config_init_cwd(const char *key, char *retv, int inlen,
+			struct lxc_conf *c, void *data)
 {
 	return lxc_get_conf_str(retv, inlen, c->init_cwd);
 }
@@ -3455,8 +3451,8 @@ static int get_config_ephemeral(const char *key, char *retv, int inlen,
 	return lxc_get_conf_int(c, retv, inlen, c->ephemeral);
 }
 
-static int get_config_no_new_privs(const char *key, char *retv, int inlen,
-				   struct lxc_conf *c, void *data)
+int get_config_no_new_privs(const char *key, char *retv, int inlen,
+			    struct lxc_conf *c, void *data)
 {
 	return lxc_get_conf_int(c, retv, inlen, c->no_new_privs);
 }
@@ -3679,8 +3675,8 @@ static inline int clr_config_tty_dir(const char *key, struct lxc_conf *c,
 	return 0;
 }
 
-static inline int clr_config_apparmor_profile(const char *key,
-					      struct lxc_conf *c, void *data)
+inline int clr_config_apparmor_profile(const char *key, struct lxc_conf *c,
+				       void *data)
 {
 	free(c->lsm_aa_profile);
 	c->lsm_aa_profile = NULL;
@@ -3695,8 +3691,8 @@ static inline int clr_config_apparmor_allow_incomplete(const char *key,
 	return 0;
 }
 
-static inline int clr_config_selinux_context(const char *key,
-					     struct lxc_conf *c, void *data)
+inline int clr_config_selinux_context(const char *key, struct lxc_conf *c,
+				      void *data)
 {
 	free(c->lsm_se_context);
 	c->lsm_se_context = NULL;
@@ -3961,8 +3957,7 @@ static inline int clr_config_init_cmd(const char *key, struct lxc_conf *c,
 	return 0;
 }
 
-static inline int clr_config_init_cwd(const char *key, struct lxc_conf *c,
-				      void *data)
+inline int clr_config_init_cwd(const char *key, struct lxc_conf *c, void *data)
 {
 	free(c->init_cwd);
 	c->init_cwd = NULL;
@@ -3990,8 +3985,8 @@ static inline int clr_config_ephemeral(const char *key, struct lxc_conf *c,
 	return 0;
 }
 
-static inline int clr_config_no_new_privs(const char *key, struct lxc_conf *c,
-					  void *data)
+inline int clr_config_no_new_privs(const char *key, struct lxc_conf *c,
+				   void *data)
 {
 	c->no_new_privs = false;
 	return 0;
