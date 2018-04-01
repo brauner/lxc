@@ -770,3 +770,18 @@ int lxc_inherit_namespace(const char *lxcname_or_pid, const char *lxcpath,
 
 	return fd;
 }
+
+int add_hook(struct lxc_conf *conf, int which, char *hook)
+{
+	struct lxc_list *hooklist;
+
+	hooklist = malloc(sizeof(*hooklist));
+	if (!hooklist) {
+		free(hook);
+		return -1;
+	}
+
+	hooklist->elem = hook;
+	lxc_list_add_tail(&conf->hooks[which], hooklist);
+	return 0;
+}

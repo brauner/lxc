@@ -817,21 +817,6 @@ static int set_config_net_script_down(const char *key, const char *value,
 	return set_config_string_item(&netdev->downscript, value);
 }
 
-static int add_hook(struct lxc_conf *lxc_conf, int which, char *hook)
-{
-	struct lxc_list *hooklist;
-
-	hooklist = malloc(sizeof(*hooklist));
-	if (!hooklist) {
-		free(hook);
-		return -1;
-	}
-
-	hooklist->elem = hook;
-	lxc_list_add_tail(&lxc_conf->hooks[which], hooklist);
-	return 0;
-}
-
 static int set_config_seccomp_profile(const char *key, const char *value,
 				      struct lxc_conf *lxc_conf, void *data)
 {
