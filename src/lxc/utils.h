@@ -540,6 +540,7 @@ extern int run_command(char *buf, size_t buf_size, int (*child_fn)(void *),
  */
 __attribute__((sentinel)) extern char *must_make_path(const char *first, ...);
 __attribute__((sentinel)) extern char *must_append_path(char *first, ...);
+__attribute__((sentinel)) extern char *must_append_string(char *first, ...);
 
 /* return copy of string @entry;  do not fail. */
 extern char *must_copy_string(const char *entry);
