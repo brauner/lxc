@@ -51,6 +51,7 @@
 #include "conf.h"
 #include "config.h"
 #include "confile.h"
+#include "confile_utils.h"
 #include "log.h"
 #include "parse.h"
 #include "utils.h"
@@ -87,6 +88,135 @@ static char *file_to_buf(const char *file, size_t *length)
 
 	*length = st.st_size;
 	return buf;
+}
+
+static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
+{
+	int ret;
+	const char *key;
+	json_t *val;
+	char *args = NULL, *env = NULL, *hook = NULL, *path = NULL;
+
+	if (json_is_object(elem) == 0)
+		return -1;
+
+	json_object_foreach(elem, key, val) {
+		size_t i;
+		json_t *it;
+
+		if (strcmp(key, "args") == 0) {
+			if (json_is_array(val) == 0)
+				goto on_error;
+
+			json_array_foreach(val, i, it) {
+				if (json_is_string(it) == 0)
+					goto on_error;
+
+				if (!args)
+					args = must_append_string((char *)json_string_value(it), NULL);
+				else
+					args = must_append_string(args, " ", json_string_value(it), NULL);
+			}
+		} else if (strcmp(key, "env") == 0) {
+			if (json_is_array(val) == 0)
+				goto on_error;
+
+			json_array_foreach(val, i, it) {
+				if (json_is_string(it) == 0)
+					goto on_error;
+
+				if (!env)
+					env = must_append_string((char *)json_string_value(it), NULL);
+				else
+					env = must_append_string(env, " ", json_string_value(it), NULL);
+			}
+		} else if (strcmp(key, "path") == 0) {
+			if (json_is_string(val) == 0)
+				goto on_error;
+
+			if (!path)
+				path = must_append_string((char *)json_string_value(val), NULL);
+			else
+				path = must_append_string(path, " ", json_string_value(val), NULL);
+		} else if (strcmp(key, "timeout") == 0) {
+			WARN("The \"timeout\" property is not implemented");
+			continue;
+		} else {
+			continue;
+		}
+	}
+
+	if (!path)
+		return 0;
+
+	if (env)
+		hook = must_append_string(env, " ", path, " ", args, NULL);
+	else
+		hook = must_append_string(path, args ? " " : NULL, args, NULL);
+
+	ret = add_hook(conf, type, hook);
+	if (ret == 0)
+		return 0;
+
+on_error:
+	free(args);
+	free(env);
+	free(hook);
+	free(path);
+	return -1;
+}
+
+static int lxc_oci_hook(json_t *elem, struct lxc_conf *conf, int type)
+{
+	size_t i;
+	json_t *val;
+
+	if (json_is_array(elem) == 0)
+		return -1;
+
+	json_array_foreach(elem, i, val) {
+		int ret;
+
+		ret = lxc_oci_add_hook(val, conf, type);
+		if (ret < 0)
+			return -1;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
+{
+	int ret;
+	const char *key;
+	json_t *val;
+
+	if (json_typeof(elem) != JSON_OBJECT)
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		enum lxchooks type;
+
+		if (strcmp(key, "prestart") == 0)
+			type = LXCHOOK_PRESTART;
+		else if (strcmp(key, "poststart") == 0)
+			/* It's probably our post-start. Anyway, we're
+			 * technically correct since go has not concept of the
+			 * fork() + exec() model.
+			 */
+			type = LXCHOOK_START;
+		else if (strcmp(key, "poststop") == 0)
+			type = LXCHOOK_POSTSTOP;
+		else
+			/* ignore */
+			continue;
+
+		ret = lxc_oci_hook(val, conf, type);
+		if (ret < 0)
+			return -1;
+	}
+
+	return 0;
 }
 
 int oci_config_read(const char *file, struct lxc_conf *conf)
@@ -126,9 +256,9 @@ int oci_config_read(const char *file, struct lxc_conf *conf)
 			if (ret < 0)
 				goto on_error;
 		} else if (strcmp(key, "hooks") == 0) {
-			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
-
+			ret = lxc_oci_hooks(value, conf);
+			if (ret < 0)
+				goto on_error;
 		} else if (strcmp(key, "linux") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
