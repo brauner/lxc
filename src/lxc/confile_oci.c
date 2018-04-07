@@ -179,7 +179,7 @@ static int lxc_oci_hook(json_t *elem, struct lxc_conf *conf, int type)
 
 		ret = lxc_oci_add_hook(val, conf, type);
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
@@ -213,7 +213,7 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 
 		ret = lxc_oci_hook(val, conf, type);
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
@@ -273,7 +273,7 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 		else
 			INFO("Ignoring \"%s\" property", key);
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
@@ -358,7 +358,7 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 			INFO("Ignoring \"%s\" property", key);
 		}
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
