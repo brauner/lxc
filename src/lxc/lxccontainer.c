@@ -46,6 +46,7 @@
 #include "commands.h"
 #include "commands_utils.h"
 #include "confile.h"
+#include "confile_oci.h"
 #include "confile_utils.h"
 #include "criu.h"
 #include "error.h"
@@ -587,8 +588,14 @@ static bool load_config_locked(struct lxc_container *c, const char *fname)
 	if (!c->lxc_conf)
 		return false;
 
-	if (lxc_config_read(fname, c->lxc_conf, false) != 0)
-		return false;
+	// FIXME: HACK HACK HACK
+	if (strcmp(fname + strlen(fname) - strlen("config.json"), "config.json") == 0) {
+		if (lxc_oci_config_read(fname, c->lxc_conf) != 0)
+		    return false;
+	} else {
+	    if (lxc_config_read(fname, c->lxc_conf, false) != 0)
+		    return false;
+	}
 
 	return true;
 }

@@ -97,19 +97,19 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 	json_t *val;
 	char *args = NULL, *env = NULL, *hook = NULL, *path = NULL;
 
-	if (json_is_object(elem) == 0)
-		return -1;
+	if (!json_is_object(elem))
+		return -EINVAL;
 
 	json_object_foreach(elem, key, val) {
 		size_t i;
 		json_t *it;
 
 		if (strcmp(key, "args") == 0) {
-			if (json_is_array(val) == 0)
+			if (!json_is_array(val))
 				goto on_error;
 
 			json_array_foreach(val, i, it) {
-				if (json_is_string(it) == 0)
+				if (!json_is_string(it))
 					goto on_error;
 
 				if (!args)
@@ -118,11 +118,11 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 					args = must_append_string(args, " ", json_string_value(it), NULL);
 			}
 		} else if (strcmp(key, "env") == 0) {
-			if (json_is_array(val) == 0)
+			if (!json_is_array(val))
 				goto on_error;
 
 			json_array_foreach(val, i, it) {
-				if (json_is_string(it) == 0)
+				if (!json_is_string(it))
 					goto on_error;
 
 				if (!env)
@@ -131,7 +131,7 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 					env = must_append_string(env, " ", json_string_value(it), NULL);
 			}
 		} else if (strcmp(key, "path") == 0) {
-			if (json_is_string(val) == 0)
+			if (!json_is_string(val))
 				goto on_error;
 
 			if (!path)
@@ -140,9 +140,8 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 				path = must_append_string(path, " ", json_string_value(val), NULL);
 		} else if (strcmp(key, "timeout") == 0) {
 			WARN("The \"timeout\" property is not implemented");
-			continue;
 		} else {
-			continue;
+			INFO("Ignoring \"%s\" property", key);
 		}
 	}
 
@@ -171,15 +170,15 @@ static int lxc_oci_hook(json_t *elem, struct lxc_conf *conf, int type)
 	size_t i;
 	json_t *val;
 
-	if (json_is_array(elem) == 0)
-		return -1;
+	if (!json_is_array(elem))
+		return -EINVAL;
 
 	json_array_foreach(elem, i, val) {
 		int ret;
 
 		ret = lxc_oci_add_hook(val, conf, type);
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
@@ -191,7 +190,7 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 	const char *key;
 	json_t *val;
 
-	if (json_typeof(elem) != JSON_OBJECT)
+	if (!json_is_object(elem))
 		return -EINVAL;
 
 	json_object_foreach(elem, key, val) {
@@ -213,7 +212,7 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 
 		ret = lxc_oci_hook(val, conf, type);
 		if (ret < 0)
-			return -1;
+			return ret;
 	}
 
 	return 0;
@@ -231,15 +230,62 @@ static int lxc_oci_linux_devices(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
-static int lxc_oci_linux_gidmap(json_t *elem, struct lxc_conf *conf)
+static int lxc_oci_linux_idmap(json_t *elem, struct lxc_conf *conf, char type)
 {
-	WARN("The \"gidMappings\" property is not implemented");
+	json_t *val;
+	json_int_t nsid, hostid, range;
+	char *idmap;
+	int ret;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	val = json_object_get(elem, "containerID");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	nsid = json_integer_value(val);
+
+	val = json_object_get(elem, "hostID");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	hostid = json_integer_value(val);
+
+	val = json_object_get(elem, "size");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	range = json_integer_value(val);
+
+	ret = asprintf(&idmap, "%c %"JSON_INTEGER_FORMAT" %"JSON_INTEGER_FORMAT" %"JSON_INTEGER_FORMAT,
+		       type, nsid, hostid, range);
+	if (ret < 0)
+		return ret;
+
+	ret = set_config_idmaps("lxc.idmap", idmap, conf, NULL);
+	free(idmap);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
-static int lxc_oci_linux_uidmap(json_t *elem, struct lxc_conf *conf)
+static int lxc_oci_linux_idmaps(json_t *elem, struct lxc_conf *conf, char type)
 {
-	WARN("The \"uidMappings\" property is not implemented");
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+		if (!json_is_object(it))
+			return -EINVAL;
+
+		ret = lxc_oci_linux_idmap(it, conf, type);
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -254,7 +300,7 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 	const char *key;
 	json_t *val;
 
-	if (json_typeof(elem) != JSON_OBJECT)
+	if (!json_is_object(elem))
 		return -EINVAL;
 
 	json_object_foreach(elem, key, val) {
@@ -265,15 +311,37 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 		else if (strcmp(key, "devices") == 0)
 			ret = lxc_oci_linux_devices(val, conf);
 		else if (strcmp(key, "gidMappings") == 0)
-			ret = lxc_oci_linux_gidmap(val, conf);
+			ret = lxc_oci_linux_idmaps(val, conf, 'g');
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
-			ret = lxc_oci_linux_uidmap(val, conf);
+			ret = lxc_oci_linux_idmaps(val, conf, 'u');
 		else
 			INFO("Ignoring \"%s\" property", key);
 		if (ret < 0)
-			return -1;
+			return ret;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_process_env(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		ret = set_config_environment("lxc.environment", json_string_value(it), conf, NULL);
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
@@ -284,7 +352,7 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 	const char *key;
 	json_t *val;
 
-	if (json_typeof(elem) != JSON_OBJECT)
+	if (!json_is_object(elem))
 		return -EINVAL;
 
 	json_object_foreach(elem, key, val) {
@@ -292,61 +360,61 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 
 		if (strcmp(key, "args") == 0) {
 		} else if (strcmp(key, "apparmorProfile") == 0) {
-			if (json_is_string(val) == 0)
-				return -1;
+			if (!json_is_string(val))
+				return -EINVAL;
 
 			ret = set_config_apparmor_profile("lxc.apparmor.profile",
 							  json_string_value(val),
 							  conf, NULL);
 		} else if (strcmp(key, "capabilities") == 0) {
-			if (json_is_object(val) == 0)
-				return -1;
+			if (!json_is_object(val))
+				return -EINVAL;
 
 			WARN("The \"capabilities\" property is not implemented");
 		} else if (strcmp(key, "cwd") == 0) {
-			if (json_is_string(val) == 0)
-				return -1;
+			if (!json_is_string(val))
+				return -EINVAL;
 
 			ret = set_config_init_cwd("lxc.init.cwd",
 						  json_string_value(val), conf,
 						  NULL);
 		} else if (strcmp(key, "consoleSize") == 0) {
-			if (json_is_object(val) == 0)
-				return -1;
+			if (!json_is_object(val))
+				return -EINVAL;
 
 			WARN("The \"consoleSize\" property is not implemented");
 		} else if (strcmp(key, "env") == 0) {
-			WARN("The \"env\" property is not implemented");
+			ret = lxc_oci_process_env(val, conf);
 		} else if (strcmp(key, "noNewPrivileges") == 0) {
 			char *s = "0";
 
-			if (json_is_boolean(val) == 0)
-				return -1;
+			if (!json_is_boolean(val))
+				return -EINVAL;
 
-			if (json_boolean_value(val) == 1)
+			if (json_is_true(val))
 				s = "1";
 			ret = set_config_no_new_privs("lxc.no_new_privs", s,
 						      conf, NULL);
 		} else if (strcmp(key, "oomScoreAdj") == 0) {
-			if (json_is_integer(val) == 0)
-				return -1;
+			if (!json_is_integer(val))
+				return -EINVAL;
 
 			WARN("The \"oomScoreAdj\" property is not implemented");
 		} else if (strcmp(key, "rlimits") == 0) {
-			if (json_is_array(val) == 0)
-				return -1;
+			if (!json_is_array(val))
+				return -EINVAL;
 
 			WARN("The \"rlimits\" property is not implemented");
 		} else if (strcmp(key, "selinuxLabel") == 0) {
-			if (json_is_string(val) == 0)
-				return -1;
+			if (!json_is_string(val))
+				return -EINVAL;
 
 			ret = set_config_selinux_context("lxc.selinux.context",
 							 json_string_value(val),
 							 conf, NULL);
 		} else if (strcmp(key, "terminal") == 0) {
-			if (json_is_boolean(val) == 0)
-				return -1;
+			if (!json_is_boolean(val))
+				return -EINVAL;
 
 			/* TODO: Seems like this is used to indicate daemonized
 			 * mode. If this is the case then we need to find a
@@ -358,7 +426,115 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 			INFO("Ignoring \"%s\" property", key);
 		}
 		if (ret < 0)
-			return -1;
+			return ret;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_root(json_t *elem, struct lxc_conf *conf)
+{
+	const char *key;
+	json_t *val;
+
+	if (json_is_object(elem) == 0)
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		int ret = 0;
+		if (strcmp(key, "path") == 0) {
+			if (!json_is_string(val))
+				return -EINVAL;
+
+			ret = set_config_rootfs_path("lxc.rootfs.path",
+						     json_string_value(val), conf,
+						     NULL);
+		} else if (strcmp(key, "readonly") == 0) {
+			if (!json_is_boolean(val))
+				return -EINVAL;
+
+			ret = set_config_rootfs_options("lxc.rootfs.options",
+							json_is_true(val) ? "ro" : "rw", conf,
+							NULL);
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+		if (ret < 0)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
+{
+	const char *key;
+	json_t *value;
+
+	if (!json_is_object(root))
+		return -EINVAL;
+
+	json_object_foreach(root, key, value) {
+		int ret;
+
+		if (strcmp(key, "annotations") == 0) {
+			WARN("The \"annotations\" property is not implemented");
+		} else if (strcmp(key, "hostname") == 0) {
+			if (!json_is_string(value))
+				return -EINVAL;
+
+			ret = set_config_uts_name("lxc.uts.name",
+						  json_string_value(value),
+						  conf, NULL);
+			if (ret < 0)
+				return ret;
+		} else if (strcmp(key, "hooks") == 0) {
+			ret = lxc_oci_hooks(value, conf);
+			if (ret < 0)
+				return ret;
+		} else if (strcmp(key, "linux") == 0) {
+			if (!json_is_object(value))
+				return -EINVAL;
+
+			ret = lxc_oci_linux(value, conf);
+			if (ret < 0)
+				return ret;
+		} else if (strcmp(key, "mounts") == 0) {
+			if (!json_is_array(value))
+				return -EINVAL;
+
+			WARN("The \"mounts\" property is not implemented");
+		} else if (strcmp(key, "process") == 0) {
+			if (!json_is_object(value))
+				return -EINVAL;
+
+			ret = lxc_oci_process(value, conf);
+			if (ret < 0)
+				return ret;
+		} else if (strcmp(key, "root") == 0) {
+			if (!json_is_object(value))
+				return ret;
+
+			ret = lxc_oci_root(value, conf);
+			if (ret < 0)
+				return ret;
+		} else if (strcmp(key, "ociVersion") == 0) {
+			if (!json_is_string(value))
+				return -EINVAL;
+
+			/* For now, just check that the version string is not
+			 * empty.
+			 */
+			if (!json_string_value(value))
+				return -EINVAL;
+		} else if (strcmp(key, "platform") == 0) {
+			if (!json_is_object(value))
+				return -EINVAL;
+
+			WARN("The \"platform\" property is not implemented");
+		} else {
+			INFO("Ignoring \"%s\"", key);
+		}
 	}
 
 	return 0;
@@ -368,14 +544,13 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 {
 	size_t length;
 	char *buf;
-	const char *key;
-	json_t *root, *value;
+	json_t *root;
 	json_error_t error;
-	int fret = -1;
+	int ret = -1;
 
 	buf = file_to_buf(file, &length);
 	if (!buf)
-		return 1;
+		return -1;
 
 	root = json_loadb(buf, length, 0, &error);
 	if (!root) {
@@ -383,73 +558,10 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 		return -1;
 	}
 
-	if (json_typeof(root) != JSON_OBJECT)
-		return -EINVAL;
+	ret = lxc_oci_config(root, conf);
+	if (ret == -EINVAL)
+		ERROR("Invalid OCI config file");
 
-	json_object_foreach(root, key, value) {
-		int ret;
-
-		if (strcmp(key, "annotations") == 0) {
-			WARN("The \"annotations\" property is not implemented");
-		} else if (strcmp(key, "hostname") == 0) {
-			if (json_typeof(value) != JSON_STRING)
-				return -EINVAL;
-
-			ret = set_config_uts_name("lxc.uts.name",
-						  json_string_value(value),
-						  conf, NULL);
-			if (ret < 0)
-				goto on_error;
-		} else if (strcmp(key, "hooks") == 0) {
-			ret = lxc_oci_hooks(value, conf);
-			if (ret < 0)
-				goto on_error;
-		} else if (strcmp(key, "linux") == 0) {
-			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
-
-			ret = lxc_oci_linux(value, conf);
-			if (ret < 0)
-				goto on_error;
-		} else if (strcmp(key, "mounts") == 0) {
-			if (json_typeof(value) != JSON_ARRAY)
-				return -EINVAL;
-
-			WARN("The \"mounts\" property is not implemented");
-		} else if (strcmp(key, "process") == 0) {
-			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
-
-			ret = lxc_oci_process(value, conf);
-			if (ret < 0)
-				goto on_error;
-		} else if (strcmp(key, "root") == 0) {
-			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
-
-			WARN("The \"root\" property is not implemented");
-		} else if (strcmp(key, "ociVersion") == 0) {
-			if (json_typeof(value) != JSON_STRING)
-				return -EINVAL;
-
-			/* For now, just check that the version string is not
-			 * empty.
-			 */
-			if (!json_string_value(value))
-				return -EINVAL;
-		} else if (strcmp(key, "platform") == 0) {
-			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
-
-			WARN("The \"platform\" property is not implemented");
-		} else {
-			INFO("Ignoring \"%s\"", key);
-		}
-	}
-
-	fret = 0;
-
-on_error:
-	/* free shit */
-	return fret;
+	json_decref(root);
+	return ret;
 }
