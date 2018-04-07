@@ -364,24 +364,10 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
-int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
+static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 {
-	size_t length;
-	char *buf;
 	const char *key;
-	json_t *root, *value;
-	json_error_t error;
-	int fret = -1;
-
-	buf = file_to_buf(file, &length);
-	if (!buf)
-		return 1;
-
-	root = json_loadb(buf, length, 0, &error);
-	if (!root) {
-		ERROR("Failed to load config file");
-		return -1;
-	}
+	json_t *value;
 
 	if (json_typeof(root) != JSON_OBJECT)
 		return -EINVAL;
@@ -399,18 +385,18 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 						  json_string_value(value),
 						  conf, NULL);
 			if (ret < 0)
-				goto on_error;
+				return ret;
 		} else if (strcmp(key, "hooks") == 0) {
 			ret = lxc_oci_hooks(value, conf);
 			if (ret < 0)
-				goto on_error;
+				return ret;
 		} else if (strcmp(key, "linux") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
 				return -EINVAL;
 
 			ret = lxc_oci_linux(value, conf);
 			if (ret < 0)
-				goto on_error;
+				return ret;
 		} else if (strcmp(key, "mounts") == 0) {
 			if (json_typeof(value) != JSON_ARRAY)
 				return -EINVAL;
@@ -422,10 +408,10 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 
 			ret = lxc_oci_process(value, conf);
 			if (ret < 0)
-				goto on_error;
+				return ret;
 		} else if (strcmp(key, "root") == 0) {
 			if (json_typeof(value) != JSON_OBJECT)
-				return -EINVAL;
+				return ret;
 
 			WARN("The \"root\" property is not implemented");
 		} else if (strcmp(key, "ociVersion") == 0) {
@@ -447,9 +433,31 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 		}
 	}
 
-	fret = 0;
+	return 0;
+}
 
-on_error:
-	/* free shit */
-	return fret;
+int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
+{
+	size_t length;
+	char *buf;
+	json_t *root;
+	json_error_t error;
+	int ret = -1;
+
+	buf = file_to_buf(file, &length);
+	if (!buf)
+		return -1;
+
+	root = json_loadb(buf, length, 0, &error);
+	if (!root) {
+		ERROR("Failed to load config file");
+		return -1;
+	}
+
+	ret = lxc_oci_config(root, conf);
+	if (ret == -EINVAL)
+		ERROR("Invalid OCI config file");
+
+	json_decref(root);
+	return ret;
 }
