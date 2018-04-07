@@ -410,6 +410,40 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_root(json_t *elem, struct lxc_conf *conf)
+{
+	const char *key;
+	json_t *val;
+
+	if (json_is_object(elem) == 0)
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		int ret = 0;
+		if (strcmp(key, "path") == 0) {
+			if (!json_is_string(val))
+				return -EINVAL;
+
+			ret = set_config_rootfs_path("lxc.rootfs.path",
+						     json_string_value(val), conf,
+						     NULL);
+		} else if (strcmp(key, "readonly") == 0) {
+			if (!json_is_boolean(val))
+				return -EINVAL;
+
+			ret = set_config_rootfs_options("lxc.rootfs.options",
+							json_is_true(val) ? "ro" : "rw", conf,
+							NULL);
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+		if (ret < 0)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 {
 	const char *key;
@@ -459,7 +493,9 @@ static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 			if (!json_is_object(value))
 				return ret;
 
-			WARN("The \"root\" property is not implemented");
+			ret = lxc_oci_root(value, conf);
+			if (ret < 0)
+				return ret;
 		} else if (strcmp(key, "ociVersion") == 0) {
 			if (!json_is_string(value))
 				return -EINVAL;
