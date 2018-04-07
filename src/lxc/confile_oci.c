@@ -140,9 +140,8 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 				path = must_append_string(path, " ", json_string_value(val), NULL);
 		} else if (strcmp(key, "timeout") == 0) {
 			WARN("The \"timeout\" property is not implemented");
-			continue;
 		} else {
-			continue;
+			INFO("Ignoring \"%s\" property", key);
 		}
 	}
 
