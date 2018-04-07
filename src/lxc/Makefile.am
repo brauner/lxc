@@ -231,6 +231,7 @@ bin_PROGRAMS = \
 	lxc-info \
 	lxc-ls \
 	lxc-monitor \
+	lxc-oci-run \
 	lxc-snapshot \
 	lxc-start \
 	lxc-stop \
@@ -277,6 +278,7 @@ lxc_wait_SOURCES = tools/lxc_wait.c tools/arguments.c tools/tool_utils.c
 lxc_create_SOURCES = tools/lxc_create.c tools/arguments.c tools/tool_utils.c
 lxc_snapshot_SOURCES = tools/lxc_snapshot.c tools/arguments.c tools/tool_utils.c
 lxc_checkpoint_SOURCES = tools/lxc_checkpoint.c tools/arguments.c tools/tool_utils.c
+lxc_oci_run_SOURCES = tools/lxc_oci_run.c tools/arguments.c tools/tool_utils.c
 endif
 
 if ENABLE_COMMANDS
