@@ -325,6 +325,28 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_process_env(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		ret = set_config_environment("lxc.environment", json_string_value(it), conf, NULL);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 {
 	const char *key;
@@ -362,7 +384,7 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 
 			WARN("The \"consoleSize\" property is not implemented");
 		} else if (strcmp(key, "env") == 0) {
-			WARN("The \"env\" property is not implemented");
+			ret = lxc_oci_process_env(val, conf);
 		} else if (strcmp(key, "noNewPrivileges") == 0) {
 			char *s = "0";
 
