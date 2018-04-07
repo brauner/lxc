@@ -230,15 +230,62 @@ static int lxc_oci_linux_devices(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
-static int lxc_oci_linux_gidmap(json_t *elem, struct lxc_conf *conf)
+static int lxc_oci_linux_idmap(json_t *elem, struct lxc_conf *conf, char type)
 {
-	WARN("The \"gidMappings\" property is not implemented");
+	json_t *val;
+	json_int_t nsid, hostid, range;
+	char *idmap;
+	int ret;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	val = json_object_get(elem, "containerID");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	nsid = json_integer_value(val);
+
+	val = json_object_get(elem, "hostID");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	hostid = json_integer_value(val);
+
+	val = json_object_get(elem, "size");
+	if (!json_is_integer(val))
+		return -EINVAL;
+	range = json_integer_value(val);
+
+	ret = asprintf(&idmap, "%c %"JSON_INTEGER_FORMAT" %"JSON_INTEGER_FORMAT" %"JSON_INTEGER_FORMAT,
+		       type, nsid, hostid, range);
+	if (ret < 0)
+		return ret;
+
+	ret = set_config_idmaps("lxc.idmap", idmap, conf, NULL);
+	free(idmap);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
 
-static int lxc_oci_linux_uidmap(json_t *elem, struct lxc_conf *conf)
+static int lxc_oci_linux_idmaps(json_t *elem, struct lxc_conf *conf, char type)
 {
-	WARN("The \"uidMappings\" property is not implemented");
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+		if (!json_is_object(it))
+			return -EINVAL;
+
+		ret = lxc_oci_linux_idmap(it, conf, type);
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -264,11 +311,11 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 		else if (strcmp(key, "devices") == 0)
 			ret = lxc_oci_linux_devices(val, conf);
 		else if (strcmp(key, "gidMappings") == 0)
-			ret = lxc_oci_linux_gidmap(val, conf);
+			ret = lxc_oci_linux_idmaps(val, conf, 'g');
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
-			ret = lxc_oci_linux_uidmap(val, conf);
+			ret = lxc_oci_linux_idmaps(val, conf, 'u');
 		else
 			INFO("Ignoring \"%s\" property", key);
 		if (ret < 0)
