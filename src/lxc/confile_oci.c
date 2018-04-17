@@ -193,6 +193,10 @@ static int lxc_oci_hooks(json_t *elem, struct lxc_conf *conf)
 	if (!json_is_object(elem))
 		return -EINVAL;
 
+	ret = set_config_hooks_version("lxc.hook.version", "1", conf, NULL);
+	if (ret < 0)
+		return ret;
+
 	json_object_foreach(elem, key, val) {
 		enum lxchooks type;
 
