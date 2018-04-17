@@ -295,6 +295,45 @@ static int lxc_oci_linux_sysctl(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_linux_namespaces(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+		const char *type;
+		json_t *val;
+		if (!json_is_object(it))
+			return -EINVAL;
+
+		val = json_object_get(it, "type");
+		if (!json_is_string(val))
+			return -EINVAL;
+
+		type = json_string_value(val);
+		if (strcmp(type, "mount") == 0)
+			type = "mnt";
+		else if (strcmp(type, "network") == 0)
+			type = "net";
+		ret = set_config_namespace_clone("lxc.namespace.clone", type, conf, NULL);
+		if (ret < 0)
+			return ret;
+
+		val = json_object_get(it, "path");
+		if (!val)
+			continue;
+		if (!json_is_string(val))
+			return -EINVAL;
+		WARN("The namespaces \"path\" property is not implemented");
+	}
+
+	return 0;
+}
+
 static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 {
 	const char *key;
@@ -312,6 +351,8 @@ static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
 			ret = lxc_oci_linux_devices(val, conf);
 		else if (strcmp(key, "gidMappings") == 0)
 			ret = lxc_oci_linux_idmaps(val, conf, 'g');
+		else if (strcmp(key, "namespaces") == 0)
+			ret = lxc_oci_linux_namespaces(val, conf);
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
