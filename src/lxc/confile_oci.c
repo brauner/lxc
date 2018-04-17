@@ -361,11 +361,12 @@ static int lxc_oci_linux_namespaces(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
-static int lxc_oci_linux(json_t *elem, struct lxc_conf *conf)
+static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 {
 	const char *key;
-	json_t *val;
+	json_t *elem, *val;
 
+	elem = json_object_get(root, "linux");
 	if (!json_is_object(elem))
 		return -EINVAL;
 
@@ -536,6 +537,7 @@ static int lxc_oci_root(json_t *elem, struct lxc_conf *conf)
 
 static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 {
+	int ret;
 	const char *key;
 	json_t *value;
 
@@ -543,8 +545,6 @@ static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 		return -EINVAL;
 
 	json_object_foreach(root, key, value) {
-		int ret;
-
 		if (strcmp(key, "annotations") == 0) {
 			WARN("The \"annotations\" property is not implemented");
 		} else if (strcmp(key, "hostname") == 0) {
@@ -558,13 +558,6 @@ static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 				return ret;
 		} else if (strcmp(key, "hooks") == 0) {
 			ret = lxc_oci_hooks(value, conf);
-			if (ret < 0)
-				return ret;
-		} else if (strcmp(key, "linux") == 0) {
-			if (!json_is_object(value))
-				return -EINVAL;
-
-			ret = lxc_oci_linux(value, conf);
 			if (ret < 0)
 				return ret;
 		} else if (strcmp(key, "mounts") == 0) {
@@ -604,6 +597,10 @@ static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 			INFO("Ignoring \"%s\"", key);
 		}
 	}
+
+	ret = lxc_oci_linux(root, conf);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }
