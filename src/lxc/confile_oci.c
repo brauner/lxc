@@ -318,7 +318,26 @@ static int lxc_oci_linux_idmaps(json_t *elem, struct lxc_conf *conf, char type)
 
 static int lxc_oci_linux_sysctl(json_t *elem, struct lxc_conf *conf)
 {
-	WARN("The \"sysctl\" property is not implemented");
+	const char *key;
+	json_t *val;
+
+	json_object_foreach(elem, key, val) {
+		int ret;
+		char *param;
+
+		if (!json_is_string(val))
+			return -EINVAL;
+
+		ret = asprintf(&param, "lxc.sysctl.%s", key);
+		if (ret < 0)
+			return -EINVAL;
+
+		ret = set_config_sysctl(param, json_string_value(val), conf, NULL);
+		free(param);
+		if (ret < 0)
+			return -EINVAL;
+	}
+
 	return 0;
 }
 
