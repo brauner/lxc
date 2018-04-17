@@ -361,8 +361,42 @@ static int lxc_oci_linux_namespaces(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+// https://github.com/opencontainers/runtime-spec/blob/v1.0.1/config-linux.md#default-devices
+// FIXME: use an absolute path for the destination (https://github.com/lxc/lxc/issues/2276)
+static const char * const default_devices[] = {
+	"/dev/null dev/null none bind,nosuid,noexec,create=file 0 0",
+	"/dev/zero dev/zero none bind,nosuid,noexec,create=file 0 0",
+	"/dev/full dev/full none bind,nosuid,noexec,create=file 0 0",
+	"/dev/random dev/random none bind,nosuid,noexec,create=file 0 0",
+	"/dev/urandom dev/urandom none bind,nosuid,noexec,create=file 0 0",
+	"/dev/tty dev/tty none bind,nosuid,noexec,create=file 0 0",
+};
+
+static int lxc_oci_linux_default_devices(struct lxc_conf *conf) {
+	int i;
+	int ret = -1;
+
+	ret = set_config_autodev("lxc.autodev", "0", conf, NULL);
+	if (ret < 0)
+		return ret;
+
+	// For /dev/ptmx
+	ret = set_config_pty_max("lxc.pty.max", "1", conf, NULL);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < sizeof(default_devices) / sizeof(default_devices[0]); ++i) {
+		ret = set_config_mount("lxc.mount.entry", default_devices[i], conf, NULL);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 {
+	int ret;
 	const char *key;
 	json_t *elem, *val;
 
@@ -370,9 +404,11 @@ static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 	if (!json_is_object(elem))
 		return -EINVAL;
 
-	json_object_foreach(elem, key, val) {
-		int ret = 0;
+	ret = lxc_oci_linux_default_devices(conf);
+	if (ret < 0)
+		return ret;
 
+	json_object_foreach(elem, key, val) {
 		if (strcmp(key, "cgroupsPath") == 0)
 			ret = lxc_oci_linux_cgroups_path(val, conf);
 		else if (strcmp(key, "devices") == 0)
