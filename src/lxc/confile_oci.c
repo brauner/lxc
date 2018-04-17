@@ -394,6 +394,54 @@ static int lxc_oci_linux_default_devices(struct lxc_conf *conf) {
 	return 0;
 }
 
+static int lxc_oci_linux_masked_paths(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+		char *entry = NULL;
+		const char *path = NULL;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		path = json_string_value(it);
+		if (path[0] != '/' || path[1] == '\0')
+			return -EINVAL;
+
+		// There is no nice way to do this with LXC today.
+		// 1. Add an optional bind mount of /dev/null, in case the
+		//    target is a file. This will fail if the target is a
+		//    directory.
+		// 2. Add an optional read-only tmpfs mount, in case the target
+		//    is a directory. This will fail if the target is a file.
+		// Unfortunately, since both mounts are optional, we can't
+		// guarantee that one of these mounts will succeed.
+		ret = asprintf(&entry, "/dev/null %s none bind,nosuid,optional 0 0", path + 1);
+		if (ret < 0)
+			return ret;
+		ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+		free(entry);
+		if (ret < 0)
+			return ret;
+
+		ret = asprintf(&entry, "tmpfs %s tmpfs ro,optional 0 0", path + 1);
+		if (ret < 0)
+			return ret;
+		ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+		free(entry);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 {
 	int ret;
@@ -415,6 +463,8 @@ static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 			ret = lxc_oci_linux_devices(val, conf);
 		else if (strcmp(key, "gidMappings") == 0)
 			ret = lxc_oci_linux_idmaps(val, conf, 'g');
+		else if (strcmp(key, "maskedPaths") == 0)
+			ret = lxc_oci_linux_masked_paths(val, conf);
 		else if (strcmp(key, "namespaces") == 0)
 			ret = lxc_oci_linux_namespaces(val, conf);
 		else if (strcmp(key, "sysctl") == 0)
