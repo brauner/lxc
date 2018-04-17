@@ -90,54 +90,75 @@ static char *file_to_buf(const char *file, size_t *length)
 	return buf;
 }
 
+static char *json_array_join(json_t *array, const char *sep)
+{
+	size_t i;
+	json_t *it;
+	size_t len = 0;
+	char *result = NULL;
+
+	if (!json_is_array(array))
+		goto on_error;
+
+	if (json_array_size(array) == 0)
+		return strdup("");
+
+	json_array_foreach(array, i, it) {
+		if (!json_is_string(it))
+			goto on_error;
+
+		len += strlen(json_string_value(it));
+	}
+	len += strlen(sep) * (json_array_size(array) - 1) + 1;
+
+	result = malloc(len);
+	if (!result)
+		goto on_error;
+
+	*result = '\0';
+	json_array_foreach(array, i, it) {
+		if (!json_is_string(it))
+			goto on_error;
+
+		if (i != 0)
+			strcat(result, sep);
+		strcat(result, json_string_value(it));
+	}
+
+	return result;
+
+on_error:
+	free(result);
+	return NULL;
+}
+
 static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 {
-	int ret;
+	int ret = -1;
 	const char *key;
 	json_t *val;
-	char *args = NULL, *env = NULL, *hook = NULL, *path = NULL;
+	char *args = NULL, *env = NULL, *hook = NULL;
+	const char *path = NULL; // ownership: jansson
 
 	if (!json_is_object(elem))
 		return -EINVAL;
 
 	json_object_foreach(elem, key, val) {
-		size_t i;
-		json_t *it;
-
 		if (strcmp(key, "args") == 0) {
-			if (!json_is_array(val))
+			args = json_array_join(val, " ");
+			if (!args)
 				goto on_error;
-
-			json_array_foreach(val, i, it) {
-				if (!json_is_string(it))
-					goto on_error;
-
-				if (!args)
-					args = must_append_string((char *)json_string_value(it), NULL);
-				else
-					args = must_append_string(args, " ", json_string_value(it), NULL);
-			}
 		} else if (strcmp(key, "env") == 0) {
-			if (!json_is_array(val))
+			env = json_array_join(val, " ");
+			if (!env)
 				goto on_error;
-
-			json_array_foreach(val, i, it) {
-				if (!json_is_string(it))
-					goto on_error;
-
-				if (!env)
-					env = must_append_string((char *)json_string_value(it), NULL);
-				else
-					env = must_append_string(env, " ", json_string_value(it), NULL);
-			}
 		} else if (strcmp(key, "path") == 0) {
-			if (!json_is_string(val))
+			if (!json_is_string(val)) {
+				ret = -EINVAL;
 				goto on_error;
+			}
 
-			if (!path)
-				path = must_append_string((char *)json_string_value(val), NULL);
-			else
-				path = must_append_string(path, " ", json_string_value(val), NULL);
+			path = json_string_value(val);
 		} else if (strcmp(key, "timeout") == 0) {
 			WARN("The \"timeout\" property is not implemented");
 		} else {
@@ -145,24 +166,26 @@ static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 		}
 	}
 
-	if (!path)
-		return 0;
+	if (!path || path[0] != '/') {
+		ret = -EINVAL;
+		goto on_error;
+	}
 
-	if (env)
-		hook = must_append_string(env, " ", path, " ", args, NULL);
-	else
-		hook = must_append_string(path, args ? " " : NULL, args, NULL);
+	// FIXME: create a LXC -> OCI translation hook.
+	ret = asprintf(&hook, "env --ignore-environment %s %s %s", env ? env : "", path, args ? args : "");
+	if (ret < 0) {
+		hook = NULL;
+		goto on_error;
+	}
 
 	ret = add_hook(conf, type, hook);
-	if (ret == 0)
-		return 0;
+	hook = NULL; // ownership was transferred to "conf"
 
 on_error:
 	free(args);
 	free(env);
 	free(hook);
-	free(path);
-	return -1;
+	return ret;
 }
 
 static int lxc_oci_hook(json_t *elem, struct lxc_conf *conf, int type)
