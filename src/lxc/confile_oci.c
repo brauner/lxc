@@ -442,6 +442,38 @@ static int lxc_oci_linux_masked_paths(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_linux_readonly_paths(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+		char *entry = NULL;
+		const char *path = NULL;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		path = json_string_value(it);
+		if (path[0] != '/' || path[1] == '\0')
+			return -EINVAL;
+
+		ret = asprintf(&entry, "%s %s none rbind,ro,relative 0 0", path + 1, path + 1);
+		if (ret < 0)
+			return ret;
+		ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+		free(entry);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 {
 	int ret;
@@ -467,6 +499,8 @@ static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 			ret = lxc_oci_linux_masked_paths(val, conf);
 		else if (strcmp(key, "namespaces") == 0)
 			ret = lxc_oci_linux_namespaces(val, conf);
+		else if (strcmp(key, "readonlyPaths") == 0)
+			ret = lxc_oci_linux_readonly_paths(val, conf);
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
