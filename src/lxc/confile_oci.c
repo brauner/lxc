@@ -571,6 +571,89 @@ static int lxc_oci_root(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_mount(json_t *elem, struct lxc_conf *conf)
+{
+	int ret = -1;
+	const char *key;
+	json_t *val;
+	const char *dst = NULL, *src = NULL, *type = NULL; // ownership: jansson
+	char *options = NULL, *entry = NULL;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		if (strcmp(key, "destination") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			dst = json_string_value(val);
+		} else if (strcmp(key, "type") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			type = json_string_value(val);
+		} else if (strcmp(key, "source") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			src = json_string_value(val);
+		} else if (strcmp(key, "options") == 0) {
+			options = json_array_join(val, ",");
+			if (!options)
+				goto on_error;
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+	}
+
+	// Reject relative paths and "/"
+	if (!dst || dst[0] != '/' || dst[1] == '\0') {
+		ret = -EINVAL;
+		goto on_error;
+	}
+
+	if (!type)
+		type = "none";
+
+	if (!options || options[0] == '\0')
+		options = strdup("defaults");
+
+	// The destination needs to be relative since the rootfs might not be known yet
+	// https://github.com/lxc/lxc/issues/2276
+	ret = asprintf(&entry, "%s %s %s %s,create=dir 0 0", src, dst + 1, type, options);
+	if (ret < 0) {
+		entry = NULL;
+		goto on_error;
+	}
+
+	ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+
+on_error:
+	free(options);
+	free(entry);
+	return ret;
+}
+
+static int lxc_oci_mounts(json_t *elem, struct lxc_conf *conf)
+{
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+
+		ret = lxc_oci_mount(it, conf);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 {
 	int ret;
@@ -600,7 +683,9 @@ static int lxc_oci_config(json_t *root, struct lxc_conf *conf)
 			if (!json_is_array(value))
 				return -EINVAL;
 
-			WARN("The \"mounts\" property is not implemented");
+			ret = lxc_oci_mounts(value, conf);
+			if (ret < 0)
+				return ret;
 		} else if (strcmp(key, "process") == 0) {
 			if (!json_is_object(value))
 				return -EINVAL;
