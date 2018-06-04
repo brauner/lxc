@@ -567,6 +567,14 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 		int ret = 0;
 
 		if (strcmp(key, "args") == 0) {
+			char *args;
+
+			args = json_array_join(val, " ");
+			if (!args)
+				return -EINVAL;
+			ret = set_config_execute_cmd("lxc.execute.cmd",
+						     args, conf, NULL);
+			free(args);
 		} else if (strcmp(key, "apparmorProfile") == 0) {
 			if (!json_is_string(val))
 				return -EINVAL;

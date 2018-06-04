@@ -57,7 +57,6 @@ int main(int argc, char *argv[])
 	}
 	c->clear_config(c);
 	c->load_config(c, "config.json");
-	c->set_config_item(c, "lxc.execute.cmd", "/bin/sh");
 
 	c->daemonize = false;
 	bret = c->start(c, 1, NULL);
