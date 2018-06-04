@@ -43,6 +43,7 @@
 #include <netinet/in.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 
@@ -251,9 +252,117 @@ static int lxc_oci_linux_cgroups_path(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_linux_device(json_t *elem, struct lxc_conf *conf)
+{
+	int ret = -1;
+	const char *key;
+	json_t *val;
+	struct stat sb;
+	const char *type = NULL, *path = NULL; // ownership: jansson
+	char *entry = NULL;
+	int64_t dev_major = -1, dev_minor = -1;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		if (strcmp(key, "type") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			type = json_string_value(val);
+		} else if (strcmp(key, "path") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			path = json_string_value(val);
+		} else if (strcmp(key, "major") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			dev_major = json_integer_value(val);
+		} else if (strcmp(key, "minor") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			dev_minor = json_integer_value(val);
+		} else if (strcmp(key, "fileMode") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			WARN("The \"fileMode\" property is not implemented");
+		} else if (strcmp(key, "uid") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			WARN("The \"uid\" property is not implemented");
+		} else if (strcmp(key, "gid") == 0) {
+			if (!json_is_integer(val))
+				return -EINVAL;
+
+			WARN("The \"gid\" property is not implemented");
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+	}
+
+	if (!type || strlen(type) != 1 || !path || path[0] != '/' ||
+	    dev_major < 0 || dev_minor < 0)
+		return -EINVAL;
+
+	// Check if the host device matches the type and major/minor
+	// from the spec, if it does we can bind-mount it.
+	ret = stat(path, &sb);
+	if (ret < 0)
+		return -ENODEV;
+
+	switch (sb.st_mode & S_IFMT) {
+	case S_IFBLK:
+		if (type[0] != 'b')
+			return -ENODEV;
+		break;
+	case S_IFCHR:
+		if (type[0] != 'c' && type[0] != 'u')
+			return -ENODEV;
+		break;
+	case S_IFIFO:
+		if (type[0] != 'p')
+			return -ENODEV;
+		break;
+	}
+
+	if (dev_major != major(sb.st_rdev) || dev_minor != minor(sb.st_rdev))
+		return -ENODEV;
+
+	ret = asprintf(&entry, "%s %s none bind,nosuid,create=file 0 0",
+		       path, path + 1);
+	if (ret < 0)
+		return ret;
+	ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+	free(entry);
+	if (ret < 0)
+		return ret;
+
+on_error:
+	return ret;
+}
+
 static int lxc_oci_linux_devices(json_t *elem, struct lxc_conf *conf)
 {
-	WARN("The \"devices\" property is not implemented");
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+
+		ret = lxc_oci_linux_device(it, conf);
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -867,6 +976,8 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 	ret = lxc_oci_config(root, conf);
 	if (ret == -EINVAL)
 		ERROR("Invalid OCI config file");
+	else if (ret < 0)
+		ERROR("Error while converting the OCI config file");
 
 	json_decref(root);
 	return ret;
