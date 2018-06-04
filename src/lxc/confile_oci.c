@@ -612,10 +612,19 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 			ret = set_config_no_new_privs("lxc.no_new_privs", s,
 						      conf, NULL);
 		} else if (strcmp(key, "oomScoreAdj") == 0) {
+			char *adj;
+
 			if (!json_is_integer(val))
 				return -EINVAL;
 
-			WARN("The \"oomScoreAdj\" property is not implemented");
+			ret = asprintf(&adj, "%"JSON_INTEGER_FORMAT,
+				       json_integer_value(val));
+			if (ret < 0)
+				return -EINVAL;
+
+			ret = set_config_proc("lxc.proc.oom_score_adj", adj,
+					      conf, NULL);
+			free(adj);
 		} else if (strcmp(key, "rlimits") == 0) {
 			if (!json_is_array(val))
 				return -EINVAL;
