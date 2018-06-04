@@ -133,6 +133,20 @@ on_error:
 	return NULL;
 }
 
+static const char *get_seccomp_action(const char *action)
+{
+	if (strcmp(action, "SCMP_ACT_KILL") == 0)
+		return "kill";
+	else if (strcmp(action, "SCMP_ACT_TRAP") == 0)
+		return "trap";
+	else if (strcmp(action, "SCMP_ACT_ERRNO") == 0)
+		return "errno 1";
+	else if (strcmp(action, "SCMP_ACT_ALLOW") == 0)
+		return "allow";
+	ERROR("seccomp action \"%s\" is not implemented", action);
+	return NULL;
+}
+
 static int lxc_oci_add_hook(json_t *elem, struct lxc_conf *conf, int type)
 {
 	int ret = -1;
@@ -425,6 +439,178 @@ static int lxc_oci_linux_idmaps(json_t *elem, struct lxc_conf *conf, char type)
 	return 0;
 }
 
+static int lxc_oci_linux_seccomp_syscall_arg(json_t *arg, struct lxc_conf *conf, FILE *fp)
+{
+	int ret = -1;
+	json_t *elem;
+	json_int_t index, value, valueTwo;
+	const char *op = NULL;
+
+	if (!json_is_object(arg))
+		return -EINVAL;
+
+	elem = json_object_get(arg, "index");
+	if (!json_is_integer(elem))
+		return -EINVAL;
+	index = json_integer_value(elem);
+
+	elem = json_object_get(arg, "value");
+	if (!json_is_integer(elem))
+		return -EINVAL;
+	value = json_integer_value(elem);
+
+	elem = json_object_get(arg, "op");
+	if (!json_is_string(elem))
+		return -EINVAL;
+	op = json_string_value(elem);
+
+	if (strcmp(op, "SCMP_CMP_MASKED_EQ") == 0) {
+		elem = json_object_get(arg, "valueTwo");
+		// See https://github.com/opencontainers/runtime-spec/issues/971
+		if (!elem)
+			valueTwo = 0;
+		else if (!json_is_integer(elem))
+			return -EINVAL;
+		else
+			valueTwo = json_integer_value(elem);
+
+		ret = fprintf(fp, "[%"JSON_INTEGER_FORMAT",%"JSON_INTEGER_FORMAT",%s,%"JSON_INTEGER_FORMAT"]", index, valueTwo, op, value);
+		return ret;
+	}
+
+	ret = fprintf(fp, "[%"JSON_INTEGER_FORMAT",%"JSON_INTEGER_FORMAT",%s]", index, value, op);
+	return ret;
+}
+
+static int lxc_oci_linux_seccomp_syscall_args(json_t *args, struct lxc_conf *conf, FILE *fp)
+{
+	int ret = -1;
+	size_t i;
+	json_t *arg;
+
+	if (!json_is_array(args))
+		return -EINVAL;
+
+	json_array_foreach(args, i, arg) {
+		ret = lxc_oci_linux_seccomp_syscall_arg(arg, conf, fp);
+		if (ret < 0)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp_syscall(json_t *elem, struct lxc_conf *conf, FILE *fp)
+{
+	size_t i;
+	json_t *names, *args, *it, *val;
+	const char *action = NULL;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	names = json_object_get(elem, "names");
+	if (!json_is_array(names) || json_array_size(names) < 1)
+		return -EINVAL;
+
+	val = json_object_get(elem, "action");
+	if (!json_is_string(val))
+		return -EINVAL;
+	action = get_seccomp_action(json_string_value(val));
+	if (!action)
+		return -EINVAL;
+
+	args = json_object_get(elem, "args");
+
+	json_array_foreach(names, i, it) {
+		int ret = -1;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		fprintf(fp, "%s %s ", json_string_value(it), action);
+		if (args) {
+			ret = lxc_oci_linux_seccomp_syscall_args(args, conf, fp);
+			if (ret < 0)
+				return -EINVAL;
+		}
+		fprintf(fp, "\n");
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp_syscalls(json_t *syscalls, struct lxc_conf *conf, FILE *fp)
+{
+	size_t i;
+	json_t *s;
+
+	if (!json_is_array(syscalls))
+		return -EINVAL;
+
+	json_array_foreach(syscalls, i, s) {
+		int ret;
+
+		ret = lxc_oci_linux_seccomp_syscall(s, conf, fp);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp(json_t *elem, struct lxc_conf *conf)
+{
+	int ret = -1;
+	json_t *val;
+	FILE *fp = NULL;
+	int fd = -1;
+	char template[] = P_tmpdir "/.lxc_seccomp_file_XXXXXX";
+	const char *default_action;
+
+	val = json_object_get(elem, "defaultAction");
+	if (!json_is_string(val))
+		return -EINVAL;
+	default_action = get_seccomp_action(json_string_value(val));
+	if (!default_action)
+		return -EINVAL;
+
+	val = json_object_get(elem, "architectures");
+	if (val)
+		WARN("The \"architectures\" property is not implemented");
+
+	fd = lxc_make_tmpfile(template, false);
+	if (fd < 0)
+		goto on_error;
+
+	fp = fdopen(fd, "w");
+	if (!fp)
+		goto on_error;
+	ret = fprintf(fp, "2\nwhitelist %s\n[all]\n", default_action);
+	if (ret < 0)
+		goto on_error;
+
+	val = json_object_get(elem, "syscalls");
+	if (val) {
+		ret = lxc_oci_linux_seccomp_syscalls(val, conf, fp);
+		if (ret < 0)
+			goto on_error;
+	}
+
+	ret = set_config_seccomp_profile("lxc.seccomp.profile", template, conf, NULL);
+	if (ret < 0)
+		goto on_error;
+
+	ret = 0;
+
+on_error:
+	if (fp)
+		fclose(fp);
+	else if (fd > 0)
+		close(fd);
+	return ret;
+}
+
 static int lxc_oci_linux_sysctl(json_t *elem, struct lxc_conf *conf)
 {
 	const char *key;
@@ -629,6 +815,8 @@ static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 			ret = lxc_oci_linux_namespaces(val, conf);
 		else if (strcmp(key, "readonlyPaths") == 0)
 			ret = lxc_oci_linux_readonly_paths(val, conf);
+		else if (strcmp(key, "seccomp") == 0)
+			ret = lxc_oci_linux_seccomp(val, conf);
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
