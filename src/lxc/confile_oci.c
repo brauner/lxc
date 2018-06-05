@@ -43,6 +43,7 @@
 #include <netinet/in.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 
@@ -129,6 +130,20 @@ static char *json_array_join(json_t *array, const char *sep)
 
 on_error:
 	free(result);
+	return NULL;
+}
+
+static const char *get_seccomp_action(const char *action)
+{
+	if (strcmp(action, "SCMP_ACT_KILL") == 0)
+		return "kill";
+	else if (strcmp(action, "SCMP_ACT_TRAP") == 0)
+		return "trap";
+	else if (strcmp(action, "SCMP_ACT_ERRNO") == 0)
+		return "errno 1";
+	else if (strcmp(action, "SCMP_ACT_ALLOW") == 0)
+		return "allow";
+	ERROR("seccomp action \"%s\" is not implemented", action);
 	return NULL;
 }
 
@@ -251,9 +266,117 @@ static int lxc_oci_linux_cgroups_path(json_t *elem, struct lxc_conf *conf)
 	return 0;
 }
 
+static int lxc_oci_linux_device(json_t *elem, struct lxc_conf *conf)
+{
+	int ret = -1;
+	const char *key;
+	json_t *val;
+	struct stat sb;
+	const char *type = NULL, *path = NULL; // ownership: jansson
+	char *entry = NULL;
+	int64_t dev_major = -1, dev_minor = -1;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	json_object_foreach(elem, key, val) {
+		if (strcmp(key, "type") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			type = json_string_value(val);
+		} else if (strcmp(key, "path") == 0) {
+			if (!json_is_string(val))
+				goto on_error;
+
+			path = json_string_value(val);
+		} else if (strcmp(key, "major") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			dev_major = json_integer_value(val);
+		} else if (strcmp(key, "minor") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			dev_minor = json_integer_value(val);
+		} else if (strcmp(key, "fileMode") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			WARN("The \"fileMode\" property is not implemented");
+		} else if (strcmp(key, "uid") == 0) {
+			if (!json_is_integer(val))
+				goto on_error;
+
+			WARN("The \"uid\" property is not implemented");
+		} else if (strcmp(key, "gid") == 0) {
+			if (!json_is_integer(val))
+				return -EINVAL;
+
+			WARN("The \"gid\" property is not implemented");
+		} else {
+			INFO("Ignoring \"%s\" property", key);
+		}
+	}
+
+	if (!type || strlen(type) != 1 || !path || path[0] != '/' ||
+	    dev_major < 0 || dev_minor < 0)
+		return -EINVAL;
+
+	// Check if the host device matches the type and major/minor
+	// from the spec, if it does we can bind-mount it.
+	ret = stat(path, &sb);
+	if (ret < 0)
+		return -ENODEV;
+
+	switch (sb.st_mode & S_IFMT) {
+	case S_IFBLK:
+		if (type[0] != 'b')
+			return -ENODEV;
+		break;
+	case S_IFCHR:
+		if (type[0] != 'c' && type[0] != 'u')
+			return -ENODEV;
+		break;
+	case S_IFIFO:
+		if (type[0] != 'p')
+			return -ENODEV;
+		break;
+	}
+
+	if (dev_major != major(sb.st_rdev) || dev_minor != minor(sb.st_rdev))
+		return -ENODEV;
+
+	ret = asprintf(&entry, "%s %s none bind,nosuid,create=file 0 0",
+		       path, path + 1);
+	if (ret < 0)
+		return ret;
+	ret = set_config_mount("lxc.mount.entry", entry, conf, NULL);
+	free(entry);
+	if (ret < 0)
+		return ret;
+
+on_error:
+	return ret;
+}
+
 static int lxc_oci_linux_devices(json_t *elem, struct lxc_conf *conf)
 {
-	WARN("The \"devices\" property is not implemented");
+	size_t i;
+	json_t *it;
+
+	if (!json_is_array(elem))
+		return -EINVAL;
+
+	json_array_foreach(elem, i, it) {
+		int ret;
+
+		ret = lxc_oci_linux_device(it, conf);
+		if (ret < 0)
+			return ret;
+	}
+
 	return 0;
 }
 
@@ -314,6 +437,178 @@ static int lxc_oci_linux_idmaps(json_t *elem, struct lxc_conf *conf, char type)
 	}
 
 	return 0;
+}
+
+static int lxc_oci_linux_seccomp_syscall_arg(json_t *arg, struct lxc_conf *conf, FILE *fp)
+{
+	int ret = -1;
+	json_t *elem;
+	json_int_t index, value, valueTwo;
+	const char *op = NULL;
+
+	if (!json_is_object(arg))
+		return -EINVAL;
+
+	elem = json_object_get(arg, "index");
+	if (!json_is_integer(elem))
+		return -EINVAL;
+	index = json_integer_value(elem);
+
+	elem = json_object_get(arg, "value");
+	if (!json_is_integer(elem))
+		return -EINVAL;
+	value = json_integer_value(elem);
+
+	elem = json_object_get(arg, "op");
+	if (!json_is_string(elem))
+		return -EINVAL;
+	op = json_string_value(elem);
+
+	if (strcmp(op, "SCMP_CMP_MASKED_EQ") == 0) {
+		elem = json_object_get(arg, "valueTwo");
+		// See https://github.com/opencontainers/runtime-spec/issues/971
+		if (!elem)
+			valueTwo = 0;
+		else if (!json_is_integer(elem))
+			return -EINVAL;
+		else
+			valueTwo = json_integer_value(elem);
+
+		ret = fprintf(fp, "[%"JSON_INTEGER_FORMAT",%"JSON_INTEGER_FORMAT",%s,%"JSON_INTEGER_FORMAT"]", index, valueTwo, op, value);
+		return ret;
+	}
+
+	ret = fprintf(fp, "[%"JSON_INTEGER_FORMAT",%"JSON_INTEGER_FORMAT",%s]", index, value, op);
+	return ret;
+}
+
+static int lxc_oci_linux_seccomp_syscall_args(json_t *args, struct lxc_conf *conf, FILE *fp)
+{
+	int ret = -1;
+	size_t i;
+	json_t *arg;
+
+	if (!json_is_array(args))
+		return -EINVAL;
+
+	json_array_foreach(args, i, arg) {
+		ret = lxc_oci_linux_seccomp_syscall_arg(arg, conf, fp);
+		if (ret < 0)
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp_syscall(json_t *elem, struct lxc_conf *conf, FILE *fp)
+{
+	size_t i;
+	json_t *names, *args, *it, *val;
+	const char *action = NULL;
+
+	if (!json_is_object(elem))
+		return -EINVAL;
+
+	names = json_object_get(elem, "names");
+	if (!json_is_array(names) || json_array_size(names) < 1)
+		return -EINVAL;
+
+	val = json_object_get(elem, "action");
+	if (!json_is_string(val))
+		return -EINVAL;
+	action = get_seccomp_action(json_string_value(val));
+	if (!action)
+		return -EINVAL;
+
+	args = json_object_get(elem, "args");
+
+	json_array_foreach(names, i, it) {
+		int ret = -1;
+
+		if (!json_is_string(it))
+			return -EINVAL;
+
+		fprintf(fp, "%s %s ", json_string_value(it), action);
+		if (args) {
+			ret = lxc_oci_linux_seccomp_syscall_args(args, conf, fp);
+			if (ret < 0)
+				return -EINVAL;
+		}
+		fprintf(fp, "\n");
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp_syscalls(json_t *syscalls, struct lxc_conf *conf, FILE *fp)
+{
+	size_t i;
+	json_t *s;
+
+	if (!json_is_array(syscalls))
+		return -EINVAL;
+
+	json_array_foreach(syscalls, i, s) {
+		int ret;
+
+		ret = lxc_oci_linux_seccomp_syscall(s, conf, fp);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int lxc_oci_linux_seccomp(json_t *elem, struct lxc_conf *conf)
+{
+	int ret = -1;
+	json_t *val;
+	FILE *fp = NULL;
+	int fd = -1;
+	char template[] = P_tmpdir "/.lxc_seccomp_file_XXXXXX";
+	const char *default_action;
+
+	val = json_object_get(elem, "defaultAction");
+	if (!json_is_string(val))
+		return -EINVAL;
+	default_action = get_seccomp_action(json_string_value(val));
+	if (!default_action)
+		return -EINVAL;
+
+	val = json_object_get(elem, "architectures");
+	if (val)
+		WARN("The \"architectures\" property is not implemented");
+
+	fd = lxc_make_tmpfile(template, false);
+	if (fd < 0)
+		goto on_error;
+
+	fp = fdopen(fd, "w");
+	if (!fp)
+		goto on_error;
+	ret = fprintf(fp, "2\nwhitelist %s\n[all]\n", default_action);
+	if (ret < 0)
+		goto on_error;
+
+	val = json_object_get(elem, "syscalls");
+	if (val) {
+		ret = lxc_oci_linux_seccomp_syscalls(val, conf, fp);
+		if (ret < 0)
+			goto on_error;
+	}
+
+	ret = set_config_seccomp_profile("lxc.seccomp.profile", template, conf, NULL);
+	if (ret < 0)
+		goto on_error;
+
+	ret = 0;
+
+on_error:
+	if (fp)
+		fclose(fp);
+	else if (fd > 0)
+		close(fd);
+	return ret;
 }
 
 static int lxc_oci_linux_sysctl(json_t *elem, struct lxc_conf *conf)
@@ -520,6 +815,8 @@ static int lxc_oci_linux(json_t *root, struct lxc_conf *conf)
 			ret = lxc_oci_linux_namespaces(val, conf);
 		else if (strcmp(key, "readonlyPaths") == 0)
 			ret = lxc_oci_linux_readonly_paths(val, conf);
+		else if (strcmp(key, "seccomp") == 0)
+			ret = lxc_oci_linux_seccomp(val, conf);
 		else if (strcmp(key, "sysctl") == 0)
 			ret = lxc_oci_linux_sysctl(val, conf);
 		else if (strcmp(key, "uidMappings") == 0)
@@ -567,6 +864,14 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 		int ret = 0;
 
 		if (strcmp(key, "args") == 0) {
+			char *args;
+
+			args = json_array_join(val, " ");
+			if (!args)
+				return -EINVAL;
+			ret = set_config_execute_cmd("lxc.execute.cmd",
+						     args, conf, NULL);
+			free(args);
 		} else if (strcmp(key, "apparmorProfile") == 0) {
 			if (!json_is_string(val))
 				return -EINVAL;
@@ -604,10 +909,19 @@ static int lxc_oci_process(json_t *elem, struct lxc_conf *conf)
 			ret = set_config_no_new_privs("lxc.no_new_privs", s,
 						      conf, NULL);
 		} else if (strcmp(key, "oomScoreAdj") == 0) {
+			char *adj;
+
 			if (!json_is_integer(val))
 				return -EINVAL;
 
-			WARN("The \"oomScoreAdj\" property is not implemented");
+			ret = asprintf(&adj, "%"JSON_INTEGER_FORMAT,
+				       json_integer_value(val));
+			if (ret < 0)
+				return -EINVAL;
+
+			ret = set_config_proc("lxc.proc.oom_score_adj", adj,
+					      conf, NULL);
+			free(adj);
 		} else if (strcmp(key, "rlimits") == 0) {
 			if (!json_is_array(val))
 				return -EINVAL;
@@ -850,6 +1164,8 @@ int lxc_oci_config_read(const char *file, struct lxc_conf *conf)
 	ret = lxc_oci_config(root, conf);
 	if (ret == -EINVAL)
 		ERROR("Invalid OCI config file");
+	else if (ret < 0)
+		ERROR("Error while converting the OCI config file");
 
 	json_decref(root);
 	return ret;
