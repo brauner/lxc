@@ -66,6 +66,7 @@
 #include "storage/overlay.h"
 #include "storage_utils.h"
 #include "sync.h"
+#include "../tests/lxctest.h"
 #include "terminal.h"
 #include "utils.h"
 #include "version.h"
@@ -3271,19 +3272,31 @@ static int do_lxcapi_get_cgroup_item(struct lxc_container *c, const char *subsys
 	if (is_stopped(c))
 		return -1;
 
+	lxc_error("%s\n", "Initializing cgroups");
 	cgroup_ops = cgroup_init(NULL);
-	if (!cgroup_ops)
+	if (!cgroup_ops) {
+		lxc_error("%s\n", "Failed initializing cgroups");
 		return -1;
+	}
+	lxc_error("%s\n", "Initialized cgroups");
 
-	if (container_disk_lock(c))
+	lxc_error("%s\n", "Getting locks");
+	if (container_disk_lock(c)) {
+		lxc_error("%s\n", "Failed to get locks");
 		return -1;
+	}
+	lxc_error("%s\n", "Got locks");
 
 	ret = cgroup_ops->get(cgroup_ops, subsys, retv, inlen, c->name,
 			      c->config_path);
 
+	lxc_error("%s\n", "Putting locks");
 	container_disk_unlock(c);
+	lxc_error("%s\n", "Put locks");
 
+	lxc_error("%s\n", "Releasing cgroups");
 	cgroup_exit(cgroup_ops);
+	lxc_error("%s\n", "Released cgroups");
 
 	return ret;
 }

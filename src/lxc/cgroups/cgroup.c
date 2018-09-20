@@ -30,6 +30,7 @@
 #include "initutils.h"
 #include "log.h"
 #include "start.h"
+#include "../../tests/lxctest.h"
 
 lxc_log_define(cgroup, lxc);
 
@@ -39,25 +40,29 @@ struct cgroup_ops *cgroup_init(struct lxc_handler *handler)
 {
 	struct cgroup_ops *cgroup_ops;
 
+	lxc_error("%s\n", "Initializing cgroup driver");
 	cgroup_ops = cgfsng_ops_init();
 	if (!cgroup_ops) {
-		ERROR("Failed to initialize cgroup driver");
+		lxc_error("%s\n", "Failed to initialize cgroup driver");
 		return NULL;
 	}
+	lxc_error("%s\n", "Initialized cgroup driver");
 
-	if (!cgroup_ops->data_init(cgroup_ops))
+	lxc_error("%s\n", "Initializing cgroup data");
+	if (!cgroup_ops->data_init(cgroup_ops)) {
+		lxc_error("%s\n", "Failed to initialize cgroup data");
 		return NULL;
-
-	TRACE("Initialized cgroup driver %s", cgroup_ops->driver);
+	}
+	lxc_error("%s\n", "Initialized cgroup data");
 
 	if (cgroup_ops->cgroup_layout == CGROUP_LAYOUT_LEGACY)
-		TRACE("Running with legacy cgroup layout");
+		lxc_error("%s\n", "Running with legacy cgroup layout");
 	else if (cgroup_ops->cgroup_layout == CGROUP_LAYOUT_HYBRID)
-		TRACE("Running with hybrid cgroup layout");
+		lxc_error("%s\n", "Running with hybrid cgroup layout");
 	else if (cgroup_ops->cgroup_layout == CGROUP_LAYOUT_UNIFIED)
-		TRACE("Running with unified cgroup layout");
+		lxc_error("%s\n", "Running with unified cgroup layout");
 	else
-		WARN("Running with unknown cgroup layout");
+		lxc_error("%s\n", "Running with unknown cgroup layout");
 
 	return cgroup_ops;
 }
@@ -67,28 +72,60 @@ void cgroup_exit(struct cgroup_ops *ops)
 	char **cur;
 	struct hierarchy **it;
 
-	if (!ops)
+	lxc_error("%s\n", "Freeing cgroups");
+	if (!ops) {
+		lxc_error("%s\n", "No cgroups to free");
 		return;
+	}
+	lxc_error("%s\n", "Freed cgroups");
 
+	lxc_error("%s\n", "Freeing cgroup_use");
 	for (cur = ops->cgroup_use; cur && *cur; cur++)
 		free(*cur);
+	lxc_error("%s\n", "Freed cgroup_use");
 
+	lxc_error("%s\n", "Freeing cgroup_pattern");
 	free(ops->cgroup_pattern);
-	free(ops->container_cgroup);
+	lxc_error("%s\n", "Freed cgroup_pattern");
 
+	lxc_error("%s\n", "Freeing container_cgroup");
+	free(ops->container_cgroup);
+	lxc_error("%s\n", "Freed container_cgroup");
+
+	lxc_error("%s\n", "Freeing hierarchies");
 	for (it = ops->hierarchies; it && *it; it++) {
 		char **ctrlr;
 
+		lxc_error("%s\n", "Freeing controllers");
 		for (ctrlr = (*it)->controllers; ctrlr && *ctrlr; ctrlr++)
 			free(*ctrlr);
-		free((*it)->controllers);
+		lxc_error("%s\n", "Freed controllers");
 
+		lxc_error("%s\n", "Freeing controllers pointer");
+		free((*it)->controllers);
+		lxc_error("%s\n", "Freed controllers pointer");
+
+		lxc_error("%s\n", "Freeing mountpoint");
 		free((*it)->mountpoint);
+		lxc_error("%s\n", "Freed mountpoint");
+
+		lxc_error("%s\n", "Freeing base_cgroup");
 		free((*it)->base_cgroup);
+		lxc_error("%s\n", "Freed base_cgroup");
+
+		lxc_error("%s\n", "Freeing fullcgpath");
 		free((*it)->fullcgpath);
+		lxc_error("%s\n", "Freed fullcgpath");
+
+		lxc_error("%s\n", "Freeing hierarchy pointer");
 		free(*it);
+		lxc_error("%s\n", "Freed hierarchy pointer");
 	}
+	lxc_error("%s\n", "Freed hierarchies");
+
+	lxc_error("%s\n", "Freeing hierarchies pointer");
 	free(ops->hierarchies);
+	lxc_error("%s\n", "Freed hierarchies pointer");
 
 	return;
 }

@@ -56,6 +56,7 @@
 #include "conf.h"
 #include "log.h"
 #include "storage/storage.h"
+#include "../../tests/lxctest.h"
 #include "utils.h"
 
 #ifndef HAVE_STRLCPY
@@ -1979,18 +1980,33 @@ static int cgfsng_get(struct cgroup_ops *ops, const char *filename, char *value,
 	if (p)
 		*p = '\0';
 
+	lxc_error("%s\n", "Getting cgroup path");
 	path = lxc_cmd_get_cgroup_path(name, lxcpath, controller);
 	/* not running */
-	if (!path)
+	if (!path) {
+		lxc_error("%s\n", "Container not running");
 		return -1;
+	}
+	lxc_error("%s\n", "Got cgroup path");
 
+	lxc_error("%s\n", "Getting hierarchy for controller");
 	h = get_hierarchy(ops, controller);
 	if (h) {
 		char *fullpath;
 
+		lxc_error("%s\n", "Got hierarchy for controller");
+
+		lxc_error("%s\n", "Building path from controller");
 		fullpath = build_full_cgpath_from_monitorpath(h, path, filename);
+		lxc_error("%s\n", "Built path from controller");
+
+		lxc_error("%s\n", "Reading form controller");
 		ret = lxc_read_from_file(fullpath, value, len);
+		lxc_error("%s\n", "Read form controller");
+
 		free(fullpath);
+	} else {
+		lxc_error("%s\n", "No hierarchy for controller");
 	}
 	free(path);
 

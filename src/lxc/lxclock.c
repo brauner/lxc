@@ -33,6 +33,7 @@
 #include "lxclock.h"
 #include "utils.h"
 #include "log.h"
+#include "../tests/lxctest.h"
 
 #ifdef MUTEX_DEBUGGING
 #include <execinfo.h>
@@ -203,9 +204,13 @@ int lxclock(struct lxc_lock *l, int timeout)
 	switch(l->type) {
 	case LXC_LOCK_ANON_SEM:
 		if (!timeout) {
+			lxc_error("%s\n", "Calling sem_wait()");
 			ret = sem_wait(l->u.sem);
-			if (ret < 0)
+			if (ret < 0) {
 				saved_errno = errno;
+				lxc_error("%s\n", "Called sem_wait()");
+			} else
+				lxc_error("%s\n", "Calling sem_wait()");
 		} else {
 			struct timespec ts;
 
@@ -248,10 +253,15 @@ int lxclock(struct lxc_lock *l, int timeout)
 		lk.l_type = F_WRLCK;
 		lk.l_whence = SEEK_SET;
 
+		lxc_error("%s\n", "Calling fcntl() for file locking");
 		ret = fcntl(l->u.f.fd, F_OFD_SETLKW, &lk);
 		if (ret < 0) {
-			if (errno == EINVAL)
+			if (errno == EINVAL) {
+				lxc_error("%s\n", "Falling back to BSD-style flocks() for file locking");
 				ret = flock(l->u.f.fd, LOCK_EX);
+			} else {
+				lxc_error("%s\n", "Failed to call fcntl() for file locking");
+			}
 			saved_errno = errno;
 		}
 
@@ -365,15 +375,22 @@ int container_disk_lock(struct lxc_container *c)
 {
 	int ret;
 
+	lxc_error("%s\n", "Taking private lock");
 	ret = lxclock(c->privlock, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		lxc_error("%s\n", "Failed to take private lock");
 		return ret;
+	}
+	lxc_error("%s\n", "Took private lock");
 
+	lxc_error("%s\n", "Taking slock lock");
 	ret = lxclock(c->slock, 0);
 	if (ret < 0) {
+		lxc_error("%s\n", "Failed to take slock lock");
 		lxcunlock(c->privlock);
 		return ret;
 	}
+	lxc_error("%s\n", "Took slock lock");
 
 	return 0;
 }
