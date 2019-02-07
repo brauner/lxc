@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/magic.h>
 #include <sched.h>
 #include <stdbool.h>
@@ -7,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
@@ -56,6 +58,10 @@ int main(int argc, char *argv[])
 		error("%s - Failed to unshare mount namespace", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
+
+	int fd = open("/proc/self/ns/mount", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		exit(EXIT_FAILURE);
 
 	ret = mount(NULL, "/", NULL, MS_SLAVE|MS_REC, NULL);
 	if (ret) {

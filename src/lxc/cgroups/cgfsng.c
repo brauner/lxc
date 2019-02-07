@@ -2795,11 +2795,78 @@ static int cg_unified_init(struct cgroup_ops *ops, bool relative,
 	return CGROUP2_SUPER_MAGIC;
 }
 
+static bool lxc_premount_necessary_controllers(struct lxc_conf *conf)
+{
+	int ret;
+
+	if (geteuid() != 0) {
+		TRACE("Skipping cgroup controller pre-mounting: %d", geteuid());
+		return true;
+	}
+
+	ret = unshare(CLONE_NEWNS);
+	if (ret < 0) {
+		SYSERROR("Failed to unshare CLONE_NEWNS");
+		return false;
+	}
+	TRACE("Unshared CLONE_NEWNS");
+
+	remount_all_slave();
+
+	ret = mkdir("/sys/fs/cgroup", 0755);
+	if (ret && errno != EEXIST) {
+		SYSERROR("Failed to create \"/sys/fs/cgroup\" mountpoint");
+		return false;
+	}
+
+	ret = mount("tmpfs", "/sys/fs/cgroup", "tmpfs",
+		    MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=755");
+	if (ret) {
+		SYSERROR("Failed to mount tmpfs at \"/sys/fs/cgroup\"");
+		return false;
+	}
+
+	if (!has_fs_type("/sys/fs/cgroup/systemd", CGROUP_SUPER_MAGIC)) {
+		ret = mkdir("/sys/fs/cgroup/systemd", 0755);
+		if (ret && errno != EEXIST) {
+			SYSERROR("Failed to create \"/sys/fs/cgroup/systemd\" mountpoint");
+			return false;
+		}
+		ret = mount("cgroup", "/sys/fs/cgroup/systemd", "cgroup",
+			    MS_NOSUID | MS_NODEV | MS_NOEXEC,
+			    "none,name=systemd,xattr");
+		if (ret) {
+			SYSERROR("Failed to mount name=systemd controller at \"/sys/fs/cgroup/systemd\"");
+			return false;
+		}
+	}
+
+	if (!has_fs_type("/sys/fs/cgroup/unified", CGROUP2_SUPER_MAGIC)) {
+		ret = mkdir("/sys/fs/cgroup/unified", 0755);
+		if (ret && errno != EEXIST) {
+			SYSERROR("Failed to create \"/sys/fs/cgroup/unified\" mountpoint");
+			return false;
+		}
+
+		ret = mount("cgroup2", "/sys/fs/cgroup/unified", "cgroup2",
+			    MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
+		if (ret) {
+			SYSERROR("Failed to mount cgroup2 at \"/sys/fs/cgroup/unified\"");
+			(void)rmdir("/sys/fs/cgroup/unified");
+		}
+	}
+
+	return true;
+}
+
 static bool cg_init(struct cgroup_ops *ops, struct lxc_conf *conf)
 {
 	int ret;
 	const char *tmp;
 	bool relative = conf->cgroup_meta.relative;
+
+	if (!lxc_premount_necessary_controllers(conf))
+		return false;
 
 	tmp = lxc_global_config_value("lxc.cgroup.use");
 	if (tmp) {
