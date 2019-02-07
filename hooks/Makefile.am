@@ -10,11 +10,11 @@ hooks_SCRIPTS = \
 	squid-deb-proxy-client \
 	nvidia
 
-binhooks_PROGRAMS = \
-	unmount-namespace
+binhooks_PROGRAMS = unmount-namespace \
+		    cgroup-mount
 
-unmount_namespace_SOURCES = \
-	unmount-namespace.c
+unmount_namespace_SOURCES = unmount-namespace.c
+cgroup_mount_SOURCES = cgroup-mount.c
 
 if IS_BIONIC
 unmount_namespace_SOURCES += \
