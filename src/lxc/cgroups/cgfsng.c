@@ -2841,21 +2841,6 @@ static bool lxc_premount_necessary_controllers(struct lxc_conf *conf)
 		}
 	}
 
-	if (!has_fs_type("/sys/fs/cgroup/unified", CGROUP2_SUPER_MAGIC)) {
-		ret = mkdir("/sys/fs/cgroup/unified", 0755);
-		if (ret && errno != EEXIST) {
-			SYSERROR("Failed to create \"/sys/fs/cgroup/unified\" mountpoint");
-			return false;
-		}
-
-		ret = mount("cgroup2", "/sys/fs/cgroup/unified", "cgroup2",
-			    MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
-		if (ret) {
-			SYSERROR("Failed to mount cgroup2 at \"/sys/fs/cgroup/unified\"");
-			(void)rmdir("/sys/fs/cgroup/unified");
-		}
-	}
-
 	return true;
 }
 
