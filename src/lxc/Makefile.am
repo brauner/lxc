@@ -107,6 +107,7 @@ liblxc_la_SOURCES = af_unix.c af_unix.h \
 		    execute.c \
 		    freezer.c \
 		    file_utils.c file_utils.h \
+		    genl.c genl.h \
 		    ../include/netns_ifaddrs.c ../include/netns_ifaddrs.h \
 		    initutils.c initutils.h \
 		    list.h \
