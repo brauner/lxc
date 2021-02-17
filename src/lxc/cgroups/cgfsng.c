@@ -1769,7 +1769,6 @@ __cgfsng_ops static void cgfsng_payload_finalize(struct cgroup_ops *ops)
         }
 }
 
-/* cgroup-full:* is done, no need to create subdirs */
 static inline bool cg_mount_needs_subdirs(int cgroup_automount_type)
 {
 	switch (cgroup_automount_type) {
@@ -1784,58 +1783,85 @@ static inline bool cg_mount_needs_subdirs(int cgroup_automount_type)
 	return false;
 }
 
-/* After $rootfs/sys/fs/container/controller/the/cg/path has been created,
- * remount controller ro if needed and bindmount the cgroupfs onto
- * control/the/cg/path.
- */
-static int cg_legacy_mount_controllers(int cgroup_automount_type, struct hierarchy *h,
-				       char *controllerpath, char *cgpath,
-				       const char *container_cgroup)
+static int cgroup1_mount(int cgroup_automount_type,
+			 int dfd_mnt_tmpfs,
+			 const char *path_tmpfs_controller,
+			 const char *path_cgroup, int dfd_mnt_controller,
+			 int dfd_mnt_cgroup_container, struct hierarchy *h)
 {
-	__do_free char *sourcepath = NULL;
-	int ret, remount_flags;
-	int flags = MS_BIND;
+	unsigned int mnt_flags_required = 0;
+	char buf1[LXC_PROC_SELF_FD_LEN], buf2[LXC_PROC_SELF_FD_LEN];
+	int ret;
 
 	if ((cgroup_automount_type == LXC_AUTO_CGROUP_RO) ||
 	    (cgroup_automount_type == LXC_AUTO_CGROUP_MIXED)) {
-		ret = mount(controllerpath, controllerpath, "cgroup", MS_BIND, NULL);
-		if (ret < 0)
-			return log_error_errno(-1, errno, "Failed to bind mount \"%s\" onto \"%s\"",
-					       controllerpath, controllerpath);
+		__do_close int fd_remount = -EBADF;
 
-		remount_flags = add_required_remount_flags(controllerpath,
-							   controllerpath,
-							   flags | MS_REMOUNT);
-		ret = mount(controllerpath, controllerpath, "cgroup",
-			    remount_flags | MS_REMOUNT | MS_BIND | MS_RDONLY,
-			    NULL);
+		ret = strnprintf(buf1, sizeof(buf1), "/proc/self/fd/%d", dfd_mnt_controller);
 		if (ret < 0)
-			return log_error_errno(-1, errno, "Failed to remount \"%s\" ro", controllerpath);
+			return ret_errno(EIO);
 
-		INFO("Remounted %s read-only", controllerpath);
+		ret = mount(buf1, buf1, "cgroup", MS_BIND, NULL);
+		if (ret < 0)
+			return syserrno(-errno, "Failed to bind mount \"%s\" onto \"%s\"", buf1, buf1);
+		TRACE("Mounted %s onto %s", buf1, buf1);
+
+		fd_remount = open_at(dfd_mnt_tmpfs, path_tmpfs_controller,
+				     PROTECT_OPATH_DIRECTORY,
+				     PROTECT_LOOKUP_BENEATH_XDEV, 0);
+		if (fd_remount < 0)
+			return syserrno(-errno, "Failed to open %d(%s)", dfd_mnt_tmpfs, path_tmpfs_controller);
+
+		ret = strnprintf(buf1, sizeof(buf1), "/proc/self/fd/%d", fd_remount);
+		if (ret < 0)
+			return ret_errno(EIO);
+
+		mnt_flags_required = add_required_remount_flags(buf1, buf1, MS_REMOUNT);
+		ret = mount(NULL, buf1, "cgroup", mnt_flags_required | MS_BIND | MS_RDONLY, NULL);
+		if (ret < 0)
+			return syserrno(-errno, "Failed to remount \"%s\" read-only", buf1);
+		INFO("Remounted \"%s\" read-only", buf1);
 	}
 
-	sourcepath = must_make_path(h->mountpoint, h->container_base_path,
-				    container_cgroup, NULL);
-	if (cgroup_automount_type == LXC_AUTO_CGROUP_RO)
-		flags |= MS_RDONLY;
-
-	ret = mount(sourcepath, cgpath, "cgroup", flags, NULL);
+	ret = strnprintf(buf1, sizeof(buf1), "/proc/self/fd/%d", h->cgfd_con);
 	if (ret < 0)
-		return log_error_errno(-1, errno, "Failed to mount \"%s\" onto \"%s\"",
-				       h->controllers[0], cgpath);
-	INFO("Mounted \"%s\" onto \"%s\"", h->controllers[0], cgpath);
+		return ret_errno(EIO);
+	print_r(h->cgfd_con, NULL);
 
-	if (flags & MS_RDONLY) {
-		remount_flags = add_required_remount_flags(sourcepath, cgpath,
-							   flags | MS_REMOUNT);
-		ret = mount(sourcepath, cgpath, "cgroup", remount_flags, NULL);
+	SYSERROR("AAAA");
+	ret = strnprintf(buf2, sizeof(buf2), "/proc/self/fd/%d", dfd_mnt_cgroup_container);
+	if (ret < 0)
+		return ret_errno(EIO);
+	print_r(dfd_mnt_cgroup_container, NULL);
+
+	ret = mount(buf1, buf2, "cgroup", MS_BIND, NULL);
+	if (ret < 0)
+		return syserrno(-errno, "Failed to mount \"%s\" onto \"%s\"", buf1, buf2);
+	INFO("Mounted \"%s\" onto \"%s\"", buf1, buf2);
+
+	if (cgroup_automount_type == LXC_AUTO_CGROUP_RO) {
+		__do_close int fd_remount = -EBADF;
+
+		fd_remount = open_at(dfd_mnt_controller, path_cgroup,
+				     PROTECT_OPATH_DIRECTORY,
+				     PROTECT_LOOKUP_BENEATH_XDEV, 0);
+		if (fd_remount < 0)
+			return syserrno(-errno, "Failed to open %d(%s)",
+					dfd_mnt_controller, path_cgroup);
+
+		ret = strnprintf(buf2, sizeof(buf2), "/proc/self/fd/%d", fd_remount);
 		if (ret < 0)
-			return log_error_errno(-1, errno, "Failed to remount \"%s\" ro", cgpath);
-		INFO("Remounted %s read-only", cgpath);
+			return ret_errno(EIO);
+
+		mnt_flags_required = add_required_remount_flags(buf1, buf2, MS_RDONLY | MS_REMOUNT);
+
+		ret = mount(NULL, buf2, "cgroup", mnt_flags_required | MS_BIND, NULL);
+		if (ret < 0)
+			return syserrno(-errno, "Failed to remount \"%s\" read-only", buf2);
+
+		INFO("Remounted %s read-only", buf2);
 	}
 
-	INFO("Completed second stage cgroup automounts for \"%s\"", cgpath);
 	return 0;
 }
 
@@ -2136,17 +2162,19 @@ __cgfsng_ops static bool cgfsng_mount(struct cgroup_ops *ops,
 				DEFAULT_CGROUP_MOUNTPOINT_RELATIVE);
 
 	for (int i = 0; ops->hierarchies[i]; i++) {
-		__do_free char *controllerpath = NULL, *path2 = NULL;
+		__do_close int dfd_mnt_controller = -EBADF,
+			       dfd_mnt_cgroup_container = -EBADF;
 		struct hierarchy *h = ops->hierarchies[i];
-		char *controller = strrchr(h->mountpoint, '/');
+		char *controller;
 
+		controller = strrchr(h->mountpoint, '/');
 		if (!controller)
 			continue;
 		controller++;
 
-		ret = mkdirat(dfd_mnt_tmpfs, controller, 0000);
-		if (ret < 0)
-			return log_error_errno(false, errno, "Failed to create cgroup mountpoint %d(%s)", dfd_mnt_tmpfs, controller);
+		dfd_mnt_controller = mkdirat_tree(dfd_mnt_tmpfs, controller, 0755, true);
+		if (dfd_mnt_controller < 0)
+			return false;
 
 		if (in_cgroup_ns && wants_force_mount) {
 			/*
@@ -2154,7 +2182,7 @@ __cgfsng_ops static bool cgfsng_mount(struct cgroup_ops *ops,
 			 * will not have CAP_SYS_ADMIN after it has started we
 			 * need to mount the cgroups manually.
 			 */
-			ret = cgroupfs_mount(cgroup_automount_type, h, rootfs, dfd_mnt_tmpfs, controller);
+			ret = cgroupfs_mount(cgroup_automount_type, h, rootfs, dfd_mnt_controller, "");
 			if (ret < 0)
 				return false;
 
@@ -2169,16 +2197,16 @@ __cgfsng_ops static bool cgfsng_mount(struct cgroup_ops *ops,
 		if (!cg_mount_needs_subdirs(cgroup_automount_type))
 			continue;
 
-		if (!cgroup_root)
-			cgroup_root = must_make_path(rootfs_mnt, DEFAULT_CGROUP_MOUNTPOINT, NULL);
-
-		controllerpath = must_make_path(cgroup_root, controller, NULL);
-		path2 = must_make_path(controllerpath, h->container_base_path, ops->container_cgroup, NULL);
-		ret = mkdir_p(path2, 0755);
-		if (ret < 0 && (errno != EEXIST))
+		/* FIXME: Needs to take h->container_base_path into account. */
+		dfd_mnt_cgroup_container = mkdirat_tree(dfd_mnt_controller, ops->container_cgroup, 0755, true);
+		if (dfd_mnt_cgroup_container < 0)
 			return false;
+		print_r(dfd_mnt_controller, NULL);
 
-		ret = cg_legacy_mount_controllers(cgroup_automount_type, h, controllerpath, path2, ops->container_cgroup);
+		ret = cgroup1_mount(cgroup_automount_type, dfd_mnt_tmpfs,
+				    controller, ops->container_cgroup,
+				    dfd_mnt_controller,
+				    dfd_mnt_cgroup_container, h);
 		if (ret < 0)
 			return false;
 	}

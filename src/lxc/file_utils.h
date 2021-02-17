@@ -120,4 +120,7 @@ static inline int dup_cloexec(int fd)
 	return move_fd(fd_dup);
 }
 
+__hidden extern int mkdirat_tree(int dfd_base, const char *path, mode_t mode,
+				 bool eexist_ignore);
+
 #endif /* __LXC_FILE_UTILS_H */

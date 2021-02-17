@@ -23,6 +23,10 @@
 #include <sys/statvfs.h>
 #endif
 
+#ifndef HAVE_STRLCPY
+#include "include/strlcpy.h"
+#endif
+
 lxc_log_define(mount_utils, lxc);
 
 int mnt_attributes_new(unsigned int old_flags, unsigned int *new_flags)
@@ -487,4 +491,63 @@ bool can_use_mount_api(void)
 	}
 
 	return supported == 1;
+}
+
+int mkdirat_tree(int dfd_base, const char *path, mode_t mode, bool eexist_ignore)
+{
+	__do_close int dfd_final = -EBADF;
+	int dfd_cur = dfd_base;
+	int ret = 0;
+	size_t len;
+	char *cur;
+	char buf[PATH_MAX];
+
+	if (is_empty_string(path))
+		return ret_errno(EINVAL);
+
+	len = strlcpy(buf, path, sizeof(buf));
+	if (len >= sizeof(buf))
+		return ret_errno(E2BIG);
+
+	lxc_iterate_parts(cur, buf, "/") {
+		/*
+		 * Even though we vetted the paths when we parsed the config
+		 * we're paranoid here and check that the path is neither
+		 * absolute nor walks upwards.
+		 */
+		if (abspath(cur))
+			return syserrno_set(-EINVAL, "No absolute paths allowed");
+
+		if (strnequal(cur, "..", STRLITERALLEN("..")))
+			return syserrno_set(-EINVAL, "No upward walking paths allowed");
+
+		ret = mkdirat(dfd_cur, cur, mode);
+		if (ret < 0) {
+			if (errno != EEXIST)
+				return syserrno(-errno, "Failed to create %d(%s)", dfd_cur, cur);
+
+			ret = -EEXIST;
+		}
+		TRACE("%s %d(%s) cgroup", !ret ? "Created" : "Reusing", dfd_cur, cur);
+
+		dfd_final = open_at(dfd_cur, cur, PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_BENEATH, 0);
+		if (dfd_final < 0)
+			return syserrno(-errno, "Fail to open%s directory %d(%s)",
+					!ret ? " newly created" : "", dfd_base, cur);
+		if (dfd_cur != dfd_base)
+			close(dfd_cur);
+		/*
+		 * Leave dfd_final pointing to the last fd we opened so
+		 * it will be automatically zapped if we return early.
+		 */
+		dfd_cur = dfd_final;
+	}
+
+	/* The final cgroup must be succesfully creatd by us. */
+	if (ret) {
+		if (ret != -EEXIST || !eexist_ignore)
+			return syserrno_set(ret, "Creating the final directory %d(%s) failed", dfd_base, path);
+	}
+
+	return move_fd(dfd_final);
 }

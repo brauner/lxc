@@ -203,4 +203,6 @@ __hidden extern unsigned long add_required_remount_flags(const char *s,
 
 __hidden extern bool can_use_mount_api(void);
 
+__hidden extern int mkdirat_tree(int dfd_base, const char *path, mode_t mode, bool eexist_ignore);
+
 #endif /* __LXC_MOUNT_UTILS_H */
