@@ -1823,18 +1823,11 @@ static int cgroup1_mount(int cgroup_automount_type,
 		INFO("Remounted \"%s\" read-only", buf1);
 	}
 
-	ret = strnprintf(buf1, sizeof(buf1), "/proc/self/fd/%d", h->cgfd_con);
-	if (ret < 0)
-		return ret_errno(EIO);
-	print_r(h->cgfd_con, NULL);
-
-	SYSERROR("AAAA");
-	ret = strnprintf(buf2, sizeof(buf2), "/proc/self/fd/%d", dfd_mnt_cgroup_container);
-	if (ret < 0)
-		return ret_errno(EIO);
-	print_r(dfd_mnt_cgroup_container, NULL);
-
-	ret = mount(buf1, buf2, "cgroup", MS_BIND, NULL);
+	strnprintf(buf1, sizeof(buf1), "/proc/self/fd/%d", h->cgfd_con);
+	strnprintf(buf2, sizeof(buf2), "/proc/self/fd/%d", dfd_mnt_cgroup_container);
+	__do_free char *s = must_make_path(h->mountpoint, h->container_base_path,
+					   path_cgroup, NULL);
+	ret = mount(s, buf2, "cgroup", MS_BIND, NULL);
 	if (ret < 0)
 		return syserrno(-errno, "Failed to mount \"%s\" onto \"%s\"", buf1, buf2);
 	INFO("Mounted \"%s\" onto \"%s\"", buf1, buf2);
