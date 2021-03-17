@@ -149,19 +149,23 @@ int dir_mount(struct lxc_storage *bdev)
 	src = lxc_storage_get_path(bdev->src, bdev->type);
 
 	if (can_use_bind_mounts()) {
-		__do_close int fd_source = -EBADF, fd_target = -EBADF;
-
-		fd_source = open_at(-EBADF, src, PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_ABSOLUTE, 0);
-		if (fd_source < 0)
-			return syserror("Failed to open \"%s\"", src);
+		__do_close int __fd_source = -EBADF, fd_target = -EBADF;
+		int fd_source;
 
 		fd_target = open_at(-EBADF, bdev->dest, PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_ABSOLUTE, 0);
 		if (fd_target < 0)
 			return syserror("Failed to open \"%s\"", bdev->dest);
 
-		ret = fd_mount_idmapped(fd_source, "", PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_BENEATH,
-					fd_target, "", PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_BENEATH,
-					0, bdev->rootfs->mnt_opts.userns_fd, true);
+		if (idmapped_rootfs_mnt(bdev->rootfs)) {
+			fd_source = bdev->rootfs->dfd_idmapped_mnt;
+		} else {
+			__fd_source = open_at(-EBADF, src, PROTECT_OPATH_DIRECTORY, PROTECT_LOOKUP_ABSOLUTE, 0);
+			if (__fd_source < 0)
+				return syserror("Failed to open \"%s\"", src);
+			fd_source = __fd_source;
+		}
+
+		ret = move_detached_mount(fd_source, fd_target, "", 0, 0);
 		if (ret < 0)
 			return syserror("Failed to mount \"%s\" onto \"%s\"", src, bdev->dest);
 	} else {

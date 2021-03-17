@@ -25,6 +25,7 @@
 #include "ringbuf.h"
 #include "start.h"
 #include "string_utils.h"
+#include "storage/storage.h"
 #include "terminal.h"
 
 #if HAVE_SYS_RESOURCE_H
@@ -232,6 +233,8 @@ struct lxc_rootfs {
 	char *data;
 	bool managed;
 	struct lxc_mount_options mnt_opts;
+	int dfd_idmapped_mnt;
+	struct lxc_storage *storage;
 };
 
 /*
@@ -504,7 +507,8 @@ extern struct lxc_conf *current_config;
 __hidden extern int run_lxc_hooks(const char *name, char *hook, struct lxc_conf *conf, char *argv[]);
 __hidden extern struct lxc_conf *lxc_conf_init(void);
 __hidden extern void lxc_conf_free(struct lxc_conf *conf);
-__hidden extern int lxc_rootfs_prepare(struct lxc_rootfs *rootfs, bool userns);
+__hidden extern int lxc_rootfs_prepare(struct lxc_conf *conf,
+				       struct lxc_rootfs *rootfs, bool userns);
 __hidden extern int lxc_map_ids(struct lxc_list *idmap, pid_t pid);
 __hidden extern int lxc_create_tty(const char *name, struct lxc_conf *conf);
 __hidden extern void lxc_delete_tty(struct lxc_tty_info *ttys);
@@ -534,7 +538,8 @@ __hidden extern int userns_exec_full(struct lxc_conf *conf, int (*fn)(void *), v
 				     const char *fn_name);
 __hidden extern int parse_mntopts(const char *mntopts, unsigned long *mntflags, char **mntdata);
 __hidden extern int parse_propagationopts(const char *mntopts, unsigned long *pflags);
-__hidden extern int parse_lxc_mntopts(struct lxc_mount_options *opts, char *mnt_opts);
+__hidden extern int parse_lxc_mntopts(struct lxc_mount_options *opts,
+				      char *mnt_opts, int *userns_fd);
 __hidden extern void tmp_proc_unmount(struct lxc_conf *lxc_conf);
 __hidden extern void suggest_default_idmap(void);
 __hidden extern FILE *make_anonymous_mount_file(struct lxc_list *mount, bool include_nesting_helpers);
@@ -580,15 +585,25 @@ static inline const char *get_rootfs_mnt(const struct lxc_rootfs *rootfs)
 	return !is_empty_string(rootfs->path) ? rootfs->mount : s;
 }
 
+static inline bool idmapped_rootfs_mnt(const struct lxc_rootfs *rootfs)
+{
+	return rootfs->mnt_opts.userns_fd >= 0;
+}
+
 static inline void put_lxc_rootfs(struct lxc_rootfs *rootfs, bool unpin)
 {
 	if (rootfs) {
 		close_prot_errno_disarm(rootfs->dfd_host);
 		close_prot_errno_disarm(rootfs->dfd_mnt);
+		close_prot_errno_disarm(rootfs->dfd_idmapped_mnt);
 		close_prot_errno_disarm(rootfs->dfd_dev);
 		close_prot_errno_disarm(rootfs->mnt_opts.userns_fd);
 		if (unpin)
 			close_prot_errno_disarm(rootfs->fd_path_pin);
+		if (rootfs->storage) {
+			storage_put(rootfs->storage);
+			rootfs->storage = NULL;
+		}
 	}
 }
 

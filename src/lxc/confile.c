@@ -2684,7 +2684,7 @@ static int set_config_rootfs_options(const char *key, const char *value,
 	if (!dup)
 		return -ENOMEM;
 
-	ret = parse_lxc_mntopts(&rootfs->mnt_opts, dup);
+	ret = parse_lxc_mntopts(&rootfs->mnt_opts, dup, NULL);
 	if (ret < 0)
 		return ret;
 

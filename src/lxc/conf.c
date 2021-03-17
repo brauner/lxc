@@ -488,12 +488,27 @@ int run_script(const char *name, const char *section, const char *script, ...)
  * no name pollution is happens.
  * don't unlink on NFS to avoid random named stale handles.
  */
-int lxc_rootfs_prepare(struct lxc_rootfs *rootfs, bool userns)
+int lxc_rootfs_prepare(struct lxc_conf *conf, struct lxc_rootfs *rootfs, bool userns)
 {
-	__do_close int dfd_path = -EBADF, fd_pin = -EBADF;
+	__do_close int dfd_path = -EBADF, fd_pin = -EBADF, fd_userns = -EBADF;
 	int ret;
 	struct stat st;
 	struct statfs stfs;
+
+	ret = access(rootfs->mount, F_OK);
+	if (ret != 0)
+		return syserror("Failed to access to \"%s\". Check it is present", rootfs->mount);
+
+	rootfs->storage = storage_init(conf);
+	if (!rootfs->storage)
+		return syserror_set(-EINVAL, "Failed to setup storage driver");
+
+	if (!is_empty_string(rootfs->mnt_opts.userns_path)) {
+		fd_userns = open_at(-EBADF, rootfs->mnt_opts.userns_path,
+				    PROTECT_OPEN_WITH_TRAILING_SYMLINKS, 0, 0);
+		if (fd_userns < 0)
+			return syserror("Failed to open user namespace");
+	}
 
 	if (rootfs->path) {
 		if (rootfs->bdev_type &&
@@ -506,13 +521,17 @@ int lxc_rootfs_prepare(struct lxc_rootfs *rootfs, bool userns)
 		dfd_path = open_at(-EBADF, "/", PROTECT_OPATH_FILE, PROTECT_LOOKUP_ABSOLUTE, 0);
 	}
 	if (dfd_path < 0)
-		return log_error_errno(-errno, errno, "Failed to open \"%s\"", rootfs->path);
+		return syserror("Failed to open \"%s\"", rootfs->path);
 
-	if (!rootfs->path)
-		return log_trace(0, "Not pinning because container does not have a rootfs");
+	if (!rootfs->path) {
+		TRACE("Not pinning because container does not have a rootfs");
+		goto out;
+	}
 
-	if (userns)
-		return log_trace(0, "Not pinning because container runs in user namespace");
+	if (userns) {
+		TRACE("Not pinning because container runs in user namespace");
+		goto out;
+	}
 
 	ret = fstat(dfd_path, &st);
 	if (ret < 0)
@@ -526,7 +545,7 @@ int lxc_rootfs_prepare(struct lxc_rootfs *rootfs, bool userns)
 			 PROTECT_LOOKUP_BENEATH,
 			 S_IWUSR | S_IRUSR);
 	if (fd_pin < 0)
-		return log_error_errno(-errno, errno, "Failed to pin rootfs");
+		return syserror("Failed to pin rootfs");
 
 	TRACE("Pinned rootfs %d(.lxc_keep)", fd_pin);
 
@@ -547,6 +566,13 @@ int lxc_rootfs_prepare(struct lxc_rootfs *rootfs, bool userns)
 		TRACE("Unlinked pinned file %d(.lxc_keep)", dfd_path);
 
 out:
+	if (fd_userns >= 0) {
+		rootfs->dfd_idmapped_mnt = create_detached_idmapped_mount(rootfs->storage->src, fd_userns, true);
+		if (rootfs->dfd_idmapped_mnt < 0)
+			return syserror("Failed to prepare idmapped mount");
+
+		rootfs->mnt_opts.userns_fd = move_fd(fd_userns);
+	}
 	rootfs->fd_path_pin = move_fd(fd_pin);
 	return 0;
 }
@@ -1269,8 +1295,8 @@ static int lxc_fill_autodev(struct lxc_rootfs *rootfs)
 static int lxc_mount_rootfs(struct lxc_conf *conf)
 {
 	int ret;
-	struct lxc_storage *bdev;
 	struct lxc_rootfs *rootfs = &conf->rootfs;
+	struct lxc_storage *storage = rootfs->storage;
 
 	if (!rootfs->path) {
 		ret = mount("", "/", NULL, MS_SLAVE | MS_REC, 0);
@@ -1284,19 +1310,10 @@ static int lxc_mount_rootfs(struct lxc_conf *conf)
 		return 0;
 	}
 
-	ret = access(rootfs->mount, F_OK);
-	if (ret != 0)
-		return log_error_errno(-1, errno, "Failed to access to \"%s\". Check it is present",
-				       rootfs->mount);
+	if (!rootfs->storage)
+		return syserror_set(-EINVAL, "Storage driver not initialized");
 
-	bdev = storage_init(conf);
-	if (!bdev)
-		return log_error(-1, "Failed to mount rootfs \"%s\" onto \"%s\" with options \"%s\"",
-				 rootfs->path, rootfs->mount,
-				 rootfs->options ? rootfs->options : "(null)");
-
-	ret = bdev->ops->mount(bdev);
-	storage_put(bdev);
+	ret = storage->ops->mount(storage);
 	if (ret < 0)
 		return log_error(-1, "Failed to mount rootfs \"%s\" onto \"%s\" with options \"%s\"",
 				 rootfs->path, rootfs->mount,
@@ -2105,8 +2122,10 @@ const char *lxc_mount_options_info[LXC_MOUNT_MAX] = {
 };
 
 /* Remove "optional", "create=dir", and "create=file" from mntopt */
-int parse_lxc_mntopts(struct lxc_mount_options *opts, char *mnt_opts)
+int parse_lxc_mntopts(struct lxc_mount_options *opts, char *mnt_opts,
+		      int *userns_fd)
 {
+	__do_close int fd_userns = -EBADF;
 
 	for (size_t i = LXC_MOUNT_CREATE_DIR; i < LXC_MOUNT_MAX; i++) {
 		const char *opt_name = lxc_mount_options_info[i];
@@ -2142,7 +2161,12 @@ int parse_lxc_mntopts(struct lxc_mount_options *opts, char *mnt_opts)
 			if (is_empty_string(opts->userns_path))
 				return syserror_set(-EINVAL, "Missing idmap path for \"idmap=<path>\" LXC specific mount option");
 
-			TRACE("Parse LXC specific mount option \"idmap=%s\"", opts->userns_path);
+			close_prot_errno_disarm(fd_userns);
+			fd_userns = open(opts->userns_path, O_RDONLY | O_NOCTTY | O_CLOEXEC);
+			if (fd_userns < 0)
+				return syserror("Failed to open user namespace");
+
+			TRACE("Parse LXC specific mount option %d->\"idmap=%s\"", fd_userns, opts->userns_path);
 			break;
 		default:
 			return syserror_set(-EINVAL, "Unknown LXC specific mount option");
@@ -2154,6 +2178,9 @@ int parse_lxc_mntopts(struct lxc_mount_options *opts, char *mnt_opts)
 		else
 			memmove(p, p2 + 1, strlen(p2 + 1) + 1);
 	}
+
+	if (userns_fd)
+		*userns_fd = move_fd(fd_userns);
 
 	return 0;
 }
@@ -2234,7 +2261,7 @@ static inline int mount_entry_on_generic(struct mntent *mntent,
 		return -1;
 	}
 
-	ret = parse_lxc_mntopts(&opts, mntent->mnt_opts);
+	ret = parse_lxc_mntopts(&opts, mntent->mnt_opts, NULL);
 	if (ret < 0)
 		return ret;
 
@@ -2726,6 +2753,7 @@ struct lxc_conf *lxc_conf_init(void)
 	}
 	new->rootfs.managed = true;
 	new->rootfs.dfd_mnt = -EBADF;
+	new->rootfs.dfd_idmapped_mnt = -EBADF;
 	new->rootfs.dfd_dev = -EBADF;
 	new->rootfs.dfd_host = -EBADF;
 	new->rootfs.fd_path_pin = -EBADF;

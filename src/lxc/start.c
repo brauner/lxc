@@ -1649,7 +1649,7 @@ static int lxc_spawn(struct lxc_handler *handler)
 	 * it readonly.
 	 * If the container is unprivileged then skip rootfs pinning.
 	 */
-	ret = lxc_rootfs_prepare(&conf->rootfs, wants_to_map_ids);
+	ret = lxc_rootfs_prepare(conf, &conf->rootfs, wants_to_map_ids);
 	if (ret) {
 		ERROR("Failed to handle rootfs pinning for container \"%s\"", handler->name);
 		goto out_delete_net;
