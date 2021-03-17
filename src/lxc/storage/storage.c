@@ -31,6 +31,7 @@
 #include "lxc.h"
 #include "lxclock.h"
 #include "memory_utils.h"
+#include "mount_utils.h"
 #include "namespace.h"
 #include "nbd.h"
 #include "overlay.h"

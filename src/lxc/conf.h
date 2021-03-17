@@ -198,6 +198,7 @@ struct lxc_mount_options {
 	int optional : 1;
 	int relative : 1;
 	char userns_path[PATH_MAX];
+	int userns_fd;
 };
 
 /* Defines a structure to store the rootfs location, the
@@ -585,6 +586,7 @@ static inline void put_lxc_rootfs(struct lxc_rootfs *rootfs, bool unpin)
 		close_prot_errno_disarm(rootfs->dfd_host);
 		close_prot_errno_disarm(rootfs->dfd_mnt);
 		close_prot_errno_disarm(rootfs->dfd_dev);
+		close_prot_errno_disarm(rootfs->mnt_opts.userns_fd);
 		if (unpin)
 			close_prot_errno_disarm(rootfs->fd_path_pin);
 	}

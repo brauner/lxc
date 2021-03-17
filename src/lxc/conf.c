@@ -2729,6 +2729,7 @@ struct lxc_conf *lxc_conf_init(void)
 	new->rootfs.dfd_dev = -EBADF;
 	new->rootfs.dfd_host = -EBADF;
 	new->rootfs.fd_path_pin = -EBADF;
+	new->rootfs.mnt_opts.userns_fd = -EBADF;
 	new->logfd = -1;
 	lxc_list_init(&new->cgroup);
 	lxc_list_init(&new->cgroup2);
